@@ -7,6 +7,8 @@ import db_api
 import asyncio
 import aiohttp
 import json
+from discord.ext import commands
+
 
 logging.config.fileConfig('config.ini')
 log = logging.getLogger(__name__)
@@ -18,14 +20,63 @@ cmd_start = config['DEFAULT']['cmd_start']
 TOKEN = config['DEFAULT']['discord_bot_token']
 URL = config['DEFAULT']['api_url']
 
-client = discord.Client()
+bot = commands.Bot(command_prefix='!')
 
-@client.event
-async def on_message(message):
-    if message.author == client.user:
-        return
-    print(message)
+users = {}
 
+
+def set_user_state(data):
+    users[data['user']['id']] = data
+
+ws_listeners = [set_user_state]
+
+def init_user_info_cache(data):
+    #TODO create update listeners for when new people are added to the server
+    for member in data['members']:
+        user = member['user']
+        users[str(user['id'])] = {'status': 'init', 'game': None}
+
+
+guild_listeners = [init_user_info_cache]
+ready_listeners = [init_user_info_cache]
+
+@bot.command()
+async def ping(ctx):
+    '''
+    Check bot latency
+    '''
+
+    latency = bot.latency
+    await ctx.send(latency)
+
+@bot.command()
+async def bet(ctx, target_user: str, win: str, amount: int):
+    '''
+    Specify a user with the @ call, win or lose, and an amount you are betting
+    '''
+    # need to be in lobby or queue
+    # need to have sufficient funds
+    # need
+    # stretch goal - winnings based off of champ winrate - requires LOL API
+    bet_user = target_user[3:-1]
+    win = True if win == 'win' else False
+    user_data = users.get(bet_user)
+    game = user_data.get('game')
+
+    print(ctx)
+
+    if not game:
+        await ctx.send(target_user + 'is not in game.')
+
+    elif game.get('name') == 'LEAGUE OF LEGENDS':
+        if game.get('state') in config['LEAGUE_BET']['bet_states']:
+            await ctx.send('Bet set for 5000')
+            pass
+        else:
+            await ctx.send('Cannot place bet on %s while they are not %s')
+    else:
+        await ctx.send('Unsupported game for betting: %s'% (user_data.get('game')))
+    pass
 
 
 async def api_call(path):
@@ -52,7 +103,6 @@ async def start(url):
                 data = json.loads(msg.data)
 
                 if data["op"] == 10:  # Hello
-
                     asyncio.ensure_future(heartbeat(
                         ws,
                         data['d']['heartbeat_interval'],
@@ -78,10 +128,14 @@ async def start(url):
                     pass
                 elif data["op"] == 0:  # Dispatch
                     last_sequence = data['d']
-                    print(data['t'], data['d'])
-
+                    print(data['t'])
+                    if data['t'] == 'GUILD_CREATE':
+                        [listener(data['d']) for listener in guild_listeners]
+                    if data['t'] == 'PRESENCE_UPDATE':
+                        [listener(data['d']) for listener in ws_listeners]
 
                 else:
+                    print('op code not handled')
                     print(data)
 
 
@@ -96,7 +150,7 @@ async def heartbeat(ws, interval, last_sequence):
 
 
 loop = asyncio.get_event_loop()
-loop.run_until_complete(asyncio.gather(*[websocket_start(), client.start(TOKEN)]))
+loop.run_until_complete(asyncio.gather(*[websocket_start(), bot.start(TOKEN)]))
 loop.close()
 
 

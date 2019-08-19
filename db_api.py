@@ -47,6 +47,8 @@ def get_user_stats(user, guild):
     except Exception as e:
         log.error(e)
 
+def get_user_gold(user, guild):
+    pass
 
 
 
