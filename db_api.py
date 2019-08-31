@@ -1,5 +1,6 @@
 import configparser
 import logging
+import logging.config
 from peewee import *
 
 
@@ -56,9 +57,9 @@ def init_user_stats(user, guild):
 
 def add_user_gold(user_id, guild_id, amount):
     try:
-        UserGuildStats.update(gold=UserGuildStats.gold + amount) \
+        (UserGuildStats.update(gold=UserGuildStats.gold + amount)
             .where(UserGuildStats.user == user_id,
-                   UserGuildStats.guild == guild_id)
+                   UserGuildStats.guild == guild_id).execute())
     except Exception as e:
         log.error(e)
 
@@ -66,7 +67,8 @@ def add_user_gold(user_id, guild_id, amount):
 def get_user_stats(user_id, guild_id):
     try:
         log.info('Get user stats: User: %s Guild: %s'%(user_id, guild_id))
-        return UserGuildStats.get(UserGuildStats.user == user_id, UserGuildStats.guild == guild_id)
+        return UserGuildStats.get(UserGuildStats.user == user_id,
+                                  UserGuildStats.guild == guild_id)
     except Exception as e:
         log.error(e)
 
@@ -104,7 +106,6 @@ def sub_user_gold(user_id, guild_id, amount):
     except Exception as err:
         log.error(err)
         print(err)
-
 
 
 def get_user_summoner_id(user):
