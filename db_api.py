@@ -125,6 +125,14 @@ def get_username_by_id(user_id):
         print(err)
 
 
+def get_users():
+    try:
+        return User.select(User.id).execute()
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
 def set_bet_game_id(bet_data):
     ''' update all bets with this game id where the bet target is this player '''
     try:

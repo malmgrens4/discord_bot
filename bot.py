@@ -8,6 +8,7 @@ import asyncio
 import aiohttp
 import json
 import league_api
+import time
 from random import randint
 from discord.ext import commands
 from functools import reduce
@@ -26,7 +27,7 @@ bot = commands.Bot(command_prefix='!')
 
 users = {}
 presence_update_listeners = []
-
+league_update_listeners = []
 guild_create_listeners = []
 
 async def resolve_pending_bets(data):
@@ -64,7 +65,7 @@ def display_balances():
 
 def get_display_bet_stats(cur_bet, match_results, bet_target_summoner_id):
     results = get_match_results(match_results, bet_target_summoner_id)
-    win_reward = get_win_reward(results['win'], cur_bet.amount)
+    win_reward = get_win_reward(results['win'], cur_bet.will_win, cur_bet.amount)
     kill_reward = get_kill_reward(results['kills'], cur_bet.amount)
     assist_reward = get_assist_reward(results['assists'], cur_bet.amount)
     death_reward = get_death_reward(results['deaths'], cur_bet.amount)
@@ -95,8 +96,8 @@ async def balance(ctx):
     stats = db_api.get_user_stats(ctx.author.id, ctx.guild.id)
     await ctx.send("""```You have %s gold doubloons```"""%(stats.gold,))
 
-def get_win_reward(win, amount):
-    return amount * 2 if win else 0
+def get_win_reward(win_predicition, win_outcome, amount):
+    return amount * 2 if win_predicition == win_outcome else 0
 
 def get_kill_reward(kills, amount):
     return int(kills*(amount * .02))
@@ -158,7 +159,7 @@ async def bet_init(data):
     if not game or game == 'None':
         return
     try:
-        if str(game.get('name')).upper() == 'LEAGUE OF LEGENDS' and str(game.get('state')).upper() == 'IN GAME':
+        if str(game.get('name')).upper() == 'LEAGUE OF LEGENDS':
             summoner_id = db_api.get_user_summoner_id({'id': data['user']['id']})
             match_data = league_api.get_player_current_match(summoner_id)
             # if it was a valid request
@@ -181,8 +182,51 @@ async def bet_init(data):
 
 async def set_user_state(data):
     users[data['user']['id']].update(data)
-    db_api.get_user_summoner_id({'id': data['user']['id']})
 
+
+async def set_user_state_league_api():
+    while True:
+        await asyncio.sleep(5)
+        try:
+            if users:
+                user_ids = [str(user.id) for user in db_api.get_users()]
+                active_league_users = []
+                for user_id in user_ids:
+                    if users[user_id]:
+                        if users[user_id].get('game'):
+                            if str.upper(users.get(user_id).get('game').get('name')) == 'LEAGUE OF LEGENDS':
+                                active_league_users.append(user_id)
+
+                for user_id in active_league_users:
+                    active_match = league_api.get_player_current_match(db_api.get_user_summoner_id({'id': user_id}))
+                    if active_match.get('status') and active_match.get('status').get('status_code')==404:
+                        users[user_id]['game']['state'] = 'NOT IN GAME'
+                        users[user_id]['game']['info'] = None
+                        [await listener() for listener in league_not_in_match_listeners]
+
+                    else:
+                        users[user_id]['game']['state'] = 'IN GAME'
+                        users[user_id]['game']['info'] = active_match
+                        [await listener(user_id, active_match) for listener in league_match_listeners]
+        except Exception as err:
+            log.error(err)
+
+
+
+async def set_game_for_pending_bets(user_id, active_match):
+    try:
+        if (active_match['gameStartTime'] - int(round(time.time() * 1000))) > -1800000:
+            db_api.set_bet_game_id({'game_id': active_match["gameId"],
+                                    'bet_target': user_id})
+            print("setting game id league API style")
+    except Exception as err:
+        log.error(err)
+
+
+
+
+league_match_listeners = [set_game_for_pending_bets]
+league_not_in_match_listeners = [resolve_pending_bets]
 
 @bot.command()
 async def bets(ctx):
@@ -253,7 +297,7 @@ def push_bet_to_db(bet_owner, guild_id, channel_id, target_user, game_name, will
            'amount': amount,
            }
     try:
-        db_api.create_bet(new_bet)
+        return db_api.create_bet(new_bet)
     except Exception as e:
         log.error(e)
 
@@ -273,7 +317,7 @@ async def ping(ctx):
 @bot.command()
 async def bet(ctx, target_user: str, win: str, amount: int):
     '''
-    Example bet Ex. !bet @Steven win 500
+    Ex. !bet @Steven ["win" or "lose"] 500
     '''
     # need to have sufficient funds
     # need
@@ -288,7 +332,7 @@ async def bet(ctx, target_user: str, win: str, amount: int):
         await ctx.send('''Insufficient funds for bet %s.'''%(db_api.get_username_by_id(ctx.author.id),))
         return
 
-    bet_target = target_user[3:-1]
+    bet_target = ''.join([i for i in target_user if i.isdigit()])
     will_win = True if win == 'win' else False
     user_data = users.get(bet_target)
     if not user_data:
@@ -298,15 +342,37 @@ async def bet(ctx, target_user: str, win: str, amount: int):
     game = user_data.get('game')
 
     if not game:
-        await ctx.send(target_user + 'is not on League of Legends. Ensure rich presence is enabled for that user.')
+        await ctx.send(target_user + 'is in a game that either does not support betting or rich presence is not enabled for that user.')
         return
 
     elif str.upper(game.get('name')) == 'LEAGUE OF LEGENDS':
-        push_bet_to_db(ctx.author.id, ctx.guild.id, ctx.channel.id, bet_target, game.get('name'), will_win, amount)
+        push_bet_to_db(ctx.author.id, ctx.guild.id, ctx.channel.id,
+                       bet_target, game.get('name'), will_win, amount)
         db_api.sub_user_gold(ctx.author.id, ctx.guild.id, amount)
-        await ctx.send('Bet that %s will %s for %s' % (users[bet_target]['username'], win, amount))
+        await ctx.send('Bet that %s will %s for %s in League of Legos' % (users[bet_target]['username'], win, amount))
     else:
         await ctx.send('Unsupported game for betting: %s'% (game.get('name')))
+
+
+def set_game_id_if_active(bet_target):
+    """Sets the game id for the bet if the user is in game and no time has elapsed."""
+    summoner_id = db_api.get_user_summoner_id(bet_target)
+    match_data = league_api.get_player_current_match(summoner_id)
+    if not match_data:
+       return '<@%s> must be in an active game for a bet to be placed on them.'%(bet_target,)
+    try:
+        current_match_id = match_data.get('gameId')
+        if match_data.get('gameDuration') <= 0:
+            db_api.set_bet_game_id({'bet_target': bet_target,
+                                    'game_id': current_match_id})
+
+            log.info('Game id set for bet on %s'%(bet_target,))
+
+        else:
+            return 'Game has already begun. Bet will apply to next game. See cancel command as well.'
+
+    except Exception as err:
+        return 'Bet not set. Encountered error %s'%(err,)
 
 
 async def api_call(path):
@@ -379,7 +445,8 @@ async def heartbeat(ws, interval, last_sequence):
 
 
 loop = asyncio.get_event_loop()
-loop.run_until_complete(asyncio.gather(*[websocket_start(), bot.start(TOKEN)]))
+
+loop.run_until_complete(asyncio.gather(*[websocket_start(), bot.start(TOKEN), set_user_state_league_api()]))
 loop.close()
 
 
