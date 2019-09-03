@@ -133,6 +133,19 @@ def get_users():
         print(err)
 
 
+def delete_most_recent_bet(user_id, guild_id):
+    try:
+        bet = ((UserBet.select().where(UserBet.user == user_id,
+           UserBet.guild == guild_id,
+            UserBet.game_id.is_null(True))\
+            .order_by(UserBet.id.desc()))).limit(1)[0]
+        bet_copy = bet
+        bet.delete_instance()
+        return bet_copy
+    except Exception as err:
+        log.error(err)
+        print(err)
+
 def set_bet_game_id(bet_data):
     ''' update all bets with this game id where the bet target is this player '''
     try:

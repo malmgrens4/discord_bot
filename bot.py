@@ -30,7 +30,7 @@ presence_update_listeners = []
 league_update_listeners = []
 guild_create_listeners = []
 
-async def resolve_pending_bets(data):
+async def resolve_pending_bets(data=None):
     # anytime a player's status is set to None we fetch all pending bets and attempt to resolve them
     # this could be improved by only triggering on players who are known to have bets placed on them
     # but that would require a db call anyway if we did not want to depend on the cache
@@ -60,8 +60,6 @@ async def resolve_pending_bets(data):
             message = get_display_bet_stats(cur_bet, match_results, bet_target_summoner_id)
             await bot.get_channel(cur_bet.channel).send(message)
 
-def display_balances():
-    pass
 
 def get_display_bet_stats(cur_bet, match_results, bet_target_summoner_id):
     results = get_match_results(match_results, bet_target_summoner_id)
@@ -80,12 +78,12 @@ def get_display_bet_stats(cur_bet, match_results, bet_target_summoner_id):
     stat_col_length = 15
 
     message = '```' + str(db_api.get_username_by_id(cur_bet.user)) + ' bet ' + str(cur_bet.amount) + ' on ' + str(db_api.get_username_by_id(cur_bet.bet_target)) + '\n' \
-              + 'category'.ljust(description_col_length) + 'stats'.ljust(stat_col_length) + 'reward'.ljust(stat_col_length) + '\n' \
-              + 'win'.ljust(description_col_length) + '| ' + ''.ljust(stat_col_length) + str(win_reward).ljust(stat_col_length) + '\n' \
-              + 'kills'.ljust(description_col_length) + '| ' + str(results['kills']).ljust(stat_col_length) + str(kill_reward).ljust(stat_col_length) + '\n' \
-              + 'assists'.ljust(description_col_length) + '| ' + str(results['assists']).ljust(stat_col_length) + str(assist_reward).ljust(stat_col_length) + '\n' \
-              + 'deaths'.ljust(description_col_length) + '| ' + str(results['deaths']).ljust(stat_col_length) + str(death_reward).ljust(stat_col_length) + '\n' \
-              + 'total'.ljust(description_col_length) + '| ' + ''.ljust(stat_col_length) + str(total_reward).ljust(stat_col_length) + '\n' + '```'
+              + 'category'.ljust(description_col_length) + 'stats'.ljust(stat_col_length) + '| ' + 'reward'.ljust(stat_col_length) + '\n' \
+              + 'win'.ljust(description_col_length) + '| ' + ''.ljust(stat_col_length) + '| ' + str(win_reward).ljust(stat_col_length) + '\n' \
+              + 'kills'.ljust(description_col_length) + '| ' + str(results['kills']).ljust(stat_col_length) + '| ' + str(kill_reward).ljust(stat_col_length) + '\n' \
+              + 'assists'.ljust(description_col_length) + '| ' + str(results['assists']).ljust(stat_col_length) + '| ' + str(assist_reward).ljust(stat_col_length) + '\n' \
+              + 'deaths'.ljust(description_col_length) + '| ' + str(results['deaths']).ljust(stat_col_length) + '| ' + str(death_reward).ljust(stat_col_length) + '\n' \
+              + 'total'.ljust(description_col_length) + '| ' + ''.ljust(stat_col_length) + '| ' + str(total_reward).ljust(stat_col_length) + '\n' + '```'
 
     return message
 
@@ -117,7 +115,7 @@ def process_bet_results(match_results, bet_target_summoner_id, cur_bet):
         log.error(bet)
         return
 
-    reward += get_win_reward(results['win'], cur_bet.amount)
+    reward += get_win_reward(cur_bet.will_win, results['win'], cur_bet.amount)
     reward += get_kill_reward(results['kills'], cur_bet.amount)
     reward += get_assist_reward(results['assists'], cur_bet.amount)
     reward += get_death_reward(results['deaths'], cur_bet.amount)
@@ -168,10 +166,7 @@ async def bet_init(data):
                     log.error('400 on match request')
                     return
 
-            current_match_id = match_data['gameId']
-            print('setting bet game id %s' % (current_match_id,))
-            db_api.set_bet_game_id({'bet_target': data['user']['id'],
-                                    'game_id': current_match_id})
+            set_game_for_pending_bets(data['user']['id'], match_data)
             # now database has reference to game Id to resolve bet with league api call
             # we will call the league api on the next status change where the user exits the game
             # then we will get the game stats - or try until we do.
@@ -215,10 +210,9 @@ async def set_user_state_league_api():
 
 async def set_game_for_pending_bets(user_id, active_match):
     try:
-        if (active_match['gameStartTime'] - int(round(time.time() * 1000))) > -1800000:
+        if int(round(time.time() * 1000)) - (active_match['gameStartTime']) < 180000:
             db_api.set_bet_game_id({'game_id': active_match["gameId"],
                                     'bet_target': user_id})
-            print("setting game id league API style")
     except Exception as err:
         log.error(err)
 
@@ -231,6 +225,10 @@ league_not_in_match_listeners = [resolve_pending_bets]
 @bot.command()
 async def bets(ctx):
     """Display all bets you have placed."""
+    await(display_all_bets(ctx))
+
+
+async def display_all_bets(ctx):
     placed_bets = db_api.get_placed_bets(ctx.author.id, ctx.guild.id)
     if not placed_bets:
         await ctx.send('You have no bets placed. Use !help to see an example.')
@@ -314,6 +312,17 @@ async def ping(ctx):
     latency = bot.latency
     await ctx.send(latency)
 
+
+@bot.command()
+async def cancel_bet(ctx):
+    """
+    Cancel the last bet you placed.
+    """
+    cur_bet = db_api.delete_most_recent_bet(ctx.author.id, ctx.guild.id)
+    if cur_bet:
+        db_api.add_user_gold(ctx.author.id, ctx.guild.id, cur_bet.amount)
+    await display_all_bets(ctx)
+
 @bot.command()
 async def bet(ctx, target_user: str, win: str, amount: int):
     '''
@@ -342,7 +351,7 @@ async def bet(ctx, target_user: str, win: str, amount: int):
     game = user_data.get('game')
 
     if not game:
-        await ctx.send(target_user + 'is in a game that either does not support betting or rich presence is not enabled for that user.')
+        await ctx.send(target_user + ' is in a game that either does not support betting or rich presence is not enabled for that user.')
         return
 
     elif str.upper(game.get('name')) == 'LEAGUE OF LEGENDS':
