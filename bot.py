@@ -34,39 +34,72 @@ guild_create_listeners = []
 
 bet_resolve_lock = asyncio.Lock()
 
+#TODO message still goes through even if bet is not initialized (when db is locked)
+# wait for id from bet before saying so.
+
 async def resolve_pending_bets(data=None):
     # anytime a player's status is set to None we fetch all pending bets and attempt to resolve them
     # this could be improved by only triggering on players who are known to have bets placed on them
     # but that would require a db call anyway if we did not want to depend on the cache
     # a user cannot be paid out twice
-    async with bet_resolve_lock:
-        try:
-            pending_bets = db_api.get_pending_bets()
-            if not pending_bets:
-                return
-            for cur_bet in pending_bets:
-                match_data = league_api.get_match_results(cur_bet.game_id)
-                bet_target_summoner_id = db_api.get_user_summoner_id({'id': cur_bet.bet_target})
-                if not bet_target_summoner_id:
-                    log.error('Summoner id not found for bet target %s when one was expected' % (bet.bet_target,))
-                    pass
+    # async with bet_resolve_lock:
+    #     try:
+    #         pending_bets = db_api.get_pending_bets()
+    #         if not pending_bets:
+    #             return
+    #         for cur_bet in pending_bets:
+    #             try:
+    #                 match_data = league_api.get_match_results(cur_bet.game_id)
+    #                 bet_target_summoner_id = db_api.get_user_summoner_id({'id': cur_bet.bet_target})
+    #                 if not bet_target_summoner_id:
+    #                     log.error('Summoner id not found for bet target %s when one was expected' % (bet.bet_target,))
+    #                     pass
+    #
+    #                 payout = process_bet_results(match_data, bet_target_summoner_id, cur_bet)
+    #                 #gameMode
+    #                 if payout is not None:
+    #                     match_results = get_match_results(match_data, bet_target_summoner_id)
+    #                     #display_bet_stats(match_results)
+    #                     user_id = cur_bet.user
+    #                     guild_id = cur_bet.guild
+    #                     # TODO rollback transaction if both don't go through
+    #                     db_api.add_user_gold(user_id, guild_id, payout)
+    #                     db_api.resolve_bet_by_id(cur_bet.id, bool(match_results['win'])==bool(cur_bet.will_win))
+    #                     message = get_display_bet_stats(cur_bet, match_data, bet_target_summoner_id)
+    #                     await bot.get_channel(cur_bet.channel).send(message)
+    #             except Exception as err:
+    #                 log.error("In loop resolving bets issue ")
+    #                 log.error(err)
+    #                 continue
+    #     except league_api.LeagueRequestError as err:
+    #         log.error("Issue in resolve pending bets")
+    #         log.error(err.message)
+    #         log.error(err.data)
+    #     except Exception as err:
+    #         log.error(err)
+    pass
 
-                payout = process_bet_results(match_data, bet_target_summoner_id, cur_bet)
 
-                if payout is not None:
-                    #display_bet_stats(match_results)
-                    user_id = cur_bet.user
-                    guild_id = cur_bet.guild
-                    db_api.add_user_gold(user_id, guild_id, payout)
-                    db_api.resolve_bet_by_id(cur_bet.id)
-                    message = get_display_bet_stats(cur_bet, match_data, bet_target_summoner_id)
-                    await bot.get_channel(cur_bet.channel).send(message)
-        except league_api.LeagueRequestError as err:
-            log.error("Issue in resolve pending bets")
-            log.error(err.message)
-            log.error(err.data)
-        except Exception as err:
-            log.error(err)
+def create_display_table(headers, rows):
+    header_display=''
+    col_length = 15
+    for header in headers:
+        header_display+= str(header).ljust(col_length)
+    header_display += '\n'
+
+    rows_display=''
+    for row in rows:
+        row_display=''
+        for value in row:
+            row_display+= ('|' + str(value)).ljust(col_length)
+        row_display+='\n'
+        rows_display+=row_display
+
+    return header_display + rows_display
+
+
+def get_bet_payout_display(cur_bet, match_data, bet_target_summoner_id):
+    aram_rewards = db_api.aram_basic_rewards
 
 
 def get_display_bet_stats(cur_bet, match_results, bet_target_summoner_id):
@@ -76,6 +109,13 @@ def get_display_bet_stats(cur_bet, match_results, bet_target_summoner_id):
     assist_reward = get_assist_reward(results['assists'], cur_bet.amount)
     death_reward = get_death_reward(results['deaths'], cur_bet.amount)
     total_reward = process_bet_results(match_results, bet_target_summoner_id, cur_bet)
+
+    # these two need to have the bet amount subtracted to reflect
+    # the actual earnings
+
+    win_reward -= cur_bet.amount
+    total_reward -= cur_bet.amount
+
 
     win_result_emojis = config['EMOJI_REACTIONS']['win'].split(',') if results['win'] else config['EMOJI_REACTIONS']['lose'].split(',')
     kills_emojis = config['EMOJI_REACTIONS']['kills'].split(',')
@@ -112,68 +152,87 @@ def get_display_bet_stats(cur_bet, match_results, bet_target_summoner_id):
 
     def most_healing_display():
         if results['top_healing']:
-            return 'most healing'.ljust(description_col_length) + '| ' + str(results['totalHeal']).ljust(stat_col_length) + '| ' + str(get_highest_heal_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
+            return 'most healing'.ljust(description_col_length) + '| ' + format_number(results['totalHeal']).ljust(stat_col_length) + '| ' + str(get_highest_heal_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
         return ''
 
     def most_damage_to_champs_display():
         if results['top_damage_dealt']:
-            return 'most damage dealt'.ljust(description_col_length) + '| ' + str(results['totalDamageDealt']).ljust(stat_col_length) + '| ' + str(get_highest_damage_to_champs_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
+            return 'top dmg dealt'.ljust(description_col_length) + '| ' + format_number(results['totalDamageDealt']).ljust(stat_col_length) + '| ' + str(get_highest_damage_to_champs_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
         return ''
 
     def most_damage_taken_display():
         if results['top_damage_taken']:
-            return 'most damage to champions'.ljust(description_col_length) + '| ' + str(results['totalDamageTaken']).ljust(stat_col_length) + '| ' + str(get_highest_damage_taken_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
+            return 'top dmg taken'.ljust(description_col_length) + '| ' + format_number(results['totalDamageTaken']).ljust(stat_col_length) + '| ' + str(get_highest_damage_taken_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
         return ''
 
     def most_gold_earned_display():
         if results['top_gold_earned']:
-            return 'most gold earned'.ljust(description_col_length) + '| ' + str(results['goldEarned']).ljust(stat_col_length) + '| ' + str(get_highest_gold_earned_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
+            return 'most gold'.ljust(description_col_length) + '| ' + format_number(results['goldEarned']).ljust(stat_col_length) + '| ' + str(get_highest_gold_earned_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
         return ''
 
-    message = '```' + str(db_api.get_username_by_id(cur_bet.user)) + ' bet ' + str(cur_bet.amount) + ' on ' + str(db_api.get_username_by_id(cur_bet.bet_target)) + '\n' \
-      + 'category'.ljust(description_col_length) + 'stats'.ljust(stat_col_length) + '| ' + 'reward'.ljust(stat_col_length) + '\n' \
-      + 'win'.ljust(description_col_length) + '| ' + ''.ljust(stat_col_length) + '| ' + str(win_reward).ljust(stat_col_length) + '\n' \
-      + 'kills'.ljust(description_col_length) + '| ' + str(results['kills']).ljust(stat_col_length) + '| ' + str(kill_reward).ljust(stat_col_length) + '\n' \
-      + 'assists'.ljust(description_col_length) + '| ' + str(results['assists']).ljust(stat_col_length) + '| ' + str(assist_reward).ljust(stat_col_length) + '\n' \
-      + 'deaths'.ljust(description_col_length) + '| ' + str(results['deaths']).ljust(stat_col_length) + '| ' + str(death_reward).ljust(stat_col_length) + '\n' \
+    message = '```' + str(db_api.get_username_by_id(cur_bet.user)) + ' bet ' + format_number(cur_bet.amount) + ' on ' + str(db_api.get_username_by_id(cur_bet.bet_target)) + '\n' \
+      + 'category'.ljust(description_col_length) + '| ' + 'stats'.ljust(stat_col_length) + '| ' + 'reward'.ljust(stat_col_length) + '\n' \
+      + 'win'.ljust(description_col_length) + '| ' + ''.ljust(stat_col_length) + '| ' + format_number(win_reward).ljust(stat_col_length) + '\n' \
+      + 'kills'.ljust(description_col_length) + '| ' + format_number(results['kills']).ljust(stat_col_length) + '| ' + format_number(kill_reward).ljust(stat_col_length) + '\n' \
+      + 'assists'.ljust(description_col_length) + '| ' + format_number(results['assists']).ljust(stat_col_length) + '| ' + format_number(assist_reward).ljust(stat_col_length) + '\n' \
+      + 'deaths'.ljust(description_col_length) + '| ' + format_number(results['deaths']).ljust(stat_col_length) + '| ' + format_number(death_reward).ljust(stat_col_length) + '\n' \
       + multi_kill_display() \
       + most_healing_display() \
       + most_damage_to_champs_display() \
       + most_damage_taken_display() \
       + most_gold_earned_display() \
-      + 'total'.ljust(description_col_length) + '| ' + ''.ljust(stat_col_length) + '| ' + str(total_reward).ljust(stat_col_length) + '\n' + '```'
+      + 'total'.ljust(description_col_length) + '| ' + ''.ljust(stat_col_length) + '| ' + format_number(total_reward).ljust(stat_col_length) + '\n' + '```'
 
     return message
 
 
+
+def format_number(value):
+    return str('{:,}'.format(value))
+
 @bot.command()
-async def balance(ctx):
+async def balance(ctx, target_user :str = None):
     """Displays your current balance"""
-    stats = db_api.get_user_stats(ctx.author.id, ctx.guild.id)
-    await ctx.send("""```You have %s gold doubloons```"""%(stats.gold,))
+    try:
+        stats = db_api.get_user_stats(ctx.author.id, ctx.guild.id)
+        msg = """```You have %s gold doubloons.```""" % (format_number(stats.gold),)
+
+        if target_user:
+            target_user = ''.join([i for i in target_user if i.isdigit()])
+            target_stats = db_api.get_user_stats(target_user, ctx.guild.id)
+            ratio = stats.gold / target_stats.gold
+            add_msg = "Also known as %s <@!%s>'s"%(ratio, target_user)
+            msg += add_msg
+
+        await ctx.send(msg)
+    except Exception as err:
+        log.error(err)
+
+
+
 
 
 def get_highest_heal_reward(amount):
-    return int(amount * .01)
+    return int(amount * .15)
 
 def get_highest_damage_to_champs_reward(amount):
-    return int(amount * .01)
+    return int(amount * .1)
 
 def get_highest_damage_taken_reward(amount):
-    return int(amount * .01)
+    return int(amount * .15)
 
 def get_highest_gold_earned_reward(amount):
-    return int(amount * .01)
+    return int(amount * .1)
 
 def get_multi_kill_reward(mult_type, count, amount):
     if mult_type == 'double':
-        multiplier = .05
+        multiplier = .025
     if mult_type == 'triple':
-        multiplier = .075
-    if mult_type == 'quadra':
         multiplier = .1
+    if mult_type == 'quadra':
+        multiplier = .15
     if mult_type == 'penta':
-        multiplier = .2
+        multiplier = .3
     if mult_type == 'unreal':
         multiplier = .5
 
@@ -183,13 +242,126 @@ def get_win_reward(win_predicition, win_outcome, amount):
     return amount * 2 if win_predicition == win_outcome else 0
 
 def get_kill_reward(kills, amount):
-    return int(kills*(amount * .02))
+    return int(kills*(amount * .01))
 
 def get_assist_reward(assists, amount):
-    return int(assists * amount * .01)
+    return int(assists * amount * .005)
 
 def get_death_reward(deaths, amount):
-    return int(deaths * amount * .02) * -1
+    return int(deaths * amount * .015) * -1
+
+
+class AramStatHelper:
+
+    def __init__(self, match_results):
+        self.results = match_results
+
+    def get_all_total_by_stat(self, key, summoner_id):
+        return sum([stat[key] for stat in self.get_all_stats()])
+
+    def get_team_total_by_stat(self, key, summoner_id, same_team=True):
+        return sum([stat[key] for stat in self.get_team_stats(summoner_id, same_team)])
+
+    def is_highest_on_team(self, key, summoner_id):
+        return self.get_stat(key, summoner_id) == max([stat[key] for stat in self.get_team_stats(summoner_id)])
+
+    def is_highest_in_game(self, key, summoner_id):
+        return self.get_stat(key, summoner_id) == max([stat[key] for stat in self.get_all_stats()])
+
+    def get_stat(self, key, summoner_id):
+        return self.get_stats(summoner_id)[key]
+
+    def get_participant_id(self, summoner_id):
+        for participant_ids in self.results['participantIdentities']:
+            player = participant_ids['player']
+            if player['summonerId'] == summoner_id:
+                return participant_ids['participantId']
+
+    def get_stats(self, summoner_id):
+        return self.get_participant_data(summoner_id)['stats']
+
+    def get_participant_data(self, summoner_id):
+        for participant in self.results['participants']:
+            if participant['participantId']==self.get_participant_id(summoner_id):
+                return participant
+
+    def get_team(self, summoner_id):
+        return self.get_participant_data(summoner_id)['teamId']
+
+    def get_team_stats(self, summoner_id, same_team=True):
+        if same_team:
+            return [stat['stats'] for stat in self.results['participants'] if stat['teamId'] == self.get_team(summoner_id)]
+        else:
+            return [stat['stats'] for stat in self.results['participants'] if stat['teamId'] == self.get_other_team(summoner_id)]
+
+    def get_other_team(self, summoner_id):
+        """Returns the first instance of another team Id. This only works if there are only two teams."""
+        my_team = self.get_team(summoner_id)
+        for participant in self.results['participants']:
+            if participant['teamId'] != my_team:
+                return participant['teamId']
+
+    def get_all_stats(self):
+        return [stat['stats'] for stat in self.results['participants']]
+
+
+#TODO rollback command
+# Create permissions for myself and create a command to roll back a bet - delete it
+# and return the user to their balance prior to the bet
+
+@bot.command()
+async def run_payout(ctx):
+    for cur_bet in db_api.get_pending_bets():
+        #sum_id = db_api.get_user_summoner_id(cur_bet.bet_target)
+        sum_id = 'DTSaOdp8ELyIztVLbi9gKEEaUvIGOvupWyiuJqisjaqCc-U'
+        # TODO make a unique set before requesting
+        match_results = league_api.get_match_results(cur_bet.game_id)
+        print(get_payouts(match_results, sum_id, cur_bet))
+
+
+
+def get_payouts(match_results, sum_id, cur_bet):
+    """Returns dict containing the title and amount of a payout reward for a given game based off of the summoner"""
+    aramHelper = AramStatHelper(match_results)
+    guild_average = db_api.get_guild_average(cur_bet.guild)
+    flat_bonus = guild_average/100
+
+    def ka_payout():
+        assist_mult = .5
+        ka = (((aramHelper.get_stat('kills', sum_id) * flat_bonus) + (assist_mult * aramHelper.get_stat('assists', sum_id) * flat_bonus)) *
+             ((aramHelper.get_stat('kills', sum_id))/(aramHelper.get_team_total_by_stat('kills', sum_id))))
+        return ka
+
+    def death_payout():
+        deaths = -((aramHelper.get_stat('deaths', sum_id) * flat_bonus) *
+                   ((aramHelper.get_stat('deaths', sum_id) * 5) / aramHelper.get_team_total_by_stat('kills', sum_id, False)))
+        return deaths
+
+    def win_payout():
+        did_win = aramHelper.get_stat('win', sum_id)
+        return 2 * cur_bet.amount if did_win == cur_bet.will_win else 0
+
+    ka = {'Kills/Assists': ka_payout()}
+    deaths = {'Deaths' : death_payout()}
+    win = {'Win': win_payout()}
+
+    payouts = [win, ka, deaths]
+
+    for key, value in db_api.aram_basic_rewards.items():
+        #TODO not sure when, but maybe 0 is a good thing (damageTaken???)
+        if aramHelper.get_stat(key, sum_id) != 0:
+            payouts.append({'display': value['display'],
+                            'mult': value['mult'],
+                            'reward': (value['mult'] * aramHelper.get_stat(key, sum_id) * flat_bonus)})
+
+    for key, value in db_api.aram_highest_rewards.items():
+        if aramHelper.is_highest_in_game(key, sum_id):
+            payouts.append({'display': value['display'],
+                            'mult': value['mult'],
+                            'reward': (value['mult'] * flat_bonus)})
+
+    return payouts
+
 
 def process_bet_results(match_results, bet_target_summoner_id, cur_bet):
 
@@ -197,7 +369,7 @@ def process_bet_results(match_results, bet_target_summoner_id, cur_bet):
     results = get_match_results(match_results, bet_target_summoner_id)
     if not results:
         log.error('user not found when expected while processing results')
-        log.error(bet)
+        log.error(cur_bet)
         return
 
     reward += get_win_reward(cur_bet.will_win, results['win'], cur_bet.amount)
@@ -210,7 +382,6 @@ def process_bet_results(match_results, bet_target_summoner_id, cur_bet):
     reward += get_highest_damage_to_champs_reward(cur_bet.amount)
     reward += get_highest_damage_taken_reward(cur_bet.amount)
     reward += get_highest_gold_earned_reward(cur_bet.amount)
-
     return reward
 
 
@@ -228,7 +399,6 @@ def get_match_results(match_results, summoner_id):
 
     if not participant_id:
         log.error('Parse match data was passed a user that was not found in the target game')
-        return ''''That mother fucker ain't in this game'''
 
     max_healing = max([participant['stats']['totalHeal'] for participant in match_results['participants']])
     max_gold_earned = max([participant['stats']['goldEarned'] for participant in match_results['participants']])
@@ -259,6 +429,7 @@ async def process_discord_data_for_league_bet(data):
         log.error(err.message)
         log.error(err.data)
     except Exception as err:
+        log.error('issue processing discord date for league bet.')
         log.error(err)
 
 
@@ -266,6 +437,7 @@ async def bet_init(user_id, match_data):
     try:
         await set_game_for_pending_bets(user_id, match_data)
     except Exception as err:
+        log.error('Issue initializing bet. Setting game for pending bets failed.')
         log.error(err)
 
 async def set_user_state(data):
@@ -274,15 +446,18 @@ async def set_user_state(data):
 
 async def league_api_updates():
     while True:
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
         if users:
             for user_id in [str(user.id) for user in db_api.get_users()]:
                 try:
-                    active_match = league_api.get_player_current_match(db_api.get_user_summoner_id({'id': user_id}))
-                    [await listener(user_id, active_match) for listener in league_match_listeners]
+                    summoner_id = db_api.get_user_summoner_id({'id': user_id})
+                    if summoner_id:
+                        active_match = league_api.get_player_current_match(summoner_id)
+                        [await listener(user_id, active_match) for listener in league_match_listeners]
                 except league_api.LeagueRequestError as err:
                     [await listener(user_id) for listener in league_not_in_match_listeners]
                 except Exception as err:
+                    log.error('League API update error.')
                     log.error(err)
 
 
@@ -291,9 +466,30 @@ async def league_api_updates():
 async def set_game_for_pending_bets(user_id, active_match):
     try:
         if int(round(time.time() * 1000)) - (active_match['gameStartTime']) < 180000:
+
+            # get all message ids with that bet target and edit the message to include a checkmark
+            bets_to_be_resolved = db_api.get_pending_bets_by_target(user_id)
+
+            for pending_bet in bets_to_be_resolved:
+                for channel in bot.get_all_channels():
+                    try:
+                        conf_msg = await channel.fetch_message(pending_bet.message_id)
+                        await conf_msg.edit(content=(':white_check_mark: ' + conf_msg.content))
+                    except Exception as err:
+                        print(err)
+                        continue
+
             db_api.set_bet_game_id({'game_id': active_match["gameId"],
                                     'bet_target': user_id})
+
+
+
+
+
+
+
     except Exception as err:
+        log.error('issue setting game for pending bets.')
         log.error(err)
 
 
@@ -327,6 +523,7 @@ def get_bet_display(placed_bets):
 
         return """```""" + title + '\n' + partition + '\n' + bet_messages + """```"""
     except Exception as err:
+        log.error('issue getting display for bets.')
         log.error(err)
 
 
@@ -372,6 +569,7 @@ def push_bet_to_db(bet_owner, guild_id, channel_id, target_user, game_name, will
     try:
         return db_api.create_bet(new_bet)
     except Exception as e:
+        log.error('Issue pushing bet to DB')
         log.error(e)
 
 guild_create_listeners = [init_user_info_cache]
@@ -398,11 +596,11 @@ async def cancel_bet(ctx):
     cur_bet = db_api.delete_most_recent_bet(ctx.author.id, ctx.guild.id)
     if cur_bet:
         db_api.add_user_gold(ctx.author.id, ctx.guild.id, cur_bet.amount)
-        await ctx.send('>>> Bet successfully canceled. %s gold doubloons added back to your account.'%(cur_bet.amount,))
+        await ctx.send('>>> Bet successfully canceled. %s gold doubloons added back to your account.'%(format_number(cur_bet.amount),))
     await display_all_bets(ctx)
 
 @bot.command()
-async def bet(ctx, target_user: str, win: str, amount: int):
+async def bet(ctx, target_user: str, win: str, amount: str):
     '''
     Bet on a league of legends game
     Ex. !bet @Steven ["win" or "lose"] 500
@@ -410,14 +608,37 @@ async def bet(ctx, target_user: str, win: str, amount: int):
     # need to have sufficient funds
     # need
     # stretch goal - winnings based off of champ winrate - requires LOL API
+    pity_flag = False
+    min_bet_percent = .1
+
+    user_stats = db_api.get_user_stats(ctx.author.id, ctx.guild.id)
+
+    if amount[-1] == '%':
+        percentage = int(''.join([i for i in amount if i.isdigit()]))
+        if 0 < percentage <= 100:
+            amount = int((percentage * .01 * user_stats.gold))
+
+
+    amount = int(amount)
 
     if amount <= 0:
         ctx.send('Must bet amount greater than 0.')
         return
 
-    user_stats = db_api.get_user_stats(ctx.author.id, ctx.guild.id)
-    if user_stats.gold < amount:
+
+    if user_stats.gold <= 10:
+        # TODO case where user already has a bet placed
+        await ctx.send('''Oh, you're poor. Here's a bet of 10, purely from pity''')
+        if user_stats.gold <= 0:
+            amount = 10
+            pity_flag = True
+
+    elif user_stats.gold < amount:
         await ctx.send('''Insufficient funds for bet %s.'''%(db_api.get_username_by_id(ctx.author.id),))
+        return
+
+    elif amount < int(min_bet_percent * user_stats.gold):
+        await ctx.send('''Minimum bet required is %s'''%(int(format_number(user_stats.gold * min_bet_percent))))
         return
 
     bet_target = ''.join([i for i in target_user if i.isdigit()])
@@ -430,8 +651,11 @@ async def bet(ctx, target_user: str, win: str, amount: int):
 
     push_bet_to_db(ctx.author.id, ctx.guild.id, ctx.channel.id,
                    bet_target, 'League of Legends', will_win, amount)
-    db_api.sub_user_gold(ctx.author.id, ctx.guild.id, amount)
-    await ctx.send('Bet that %s will %s for %s in League of Legos' % (users[bet_target]['username'], win, amount))
+    if not pity_flag:
+        db_api.sub_user_gold(ctx.author.id, ctx.guild.id, amount)
+    conf_msg = await ctx.send('Bet that %s will %s for %s in League of Legos' % (users[bet_target]['username'], win, amount))
+    db_api.set_message_id_by_target_user(conf_msg.id, bet_target)
+
 
 
 async def api_call(path):

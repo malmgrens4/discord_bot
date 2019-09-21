@@ -1,6 +1,7 @@
 import configparser
 import logging
 import logging.config
+from datetime import datetime
 from peewee import *
 
 
@@ -25,6 +26,8 @@ class User(BaseModel):
     username = TextField()
     discriminator = TextField()
     summoner_id = TextField(null=True)
+    league_puuid = TextField(null=True)
+    league_name = TextField(null=True)
 
 class UserGuildStats(BaseModel):
     guild = IntegerField(null=False)
@@ -44,9 +47,18 @@ class UserBet(BaseModel):
     will_win = BooleanField()
     amount = IntegerField()
     resolved = BooleanField(default=False)
+    result = BooleanField(null=True)
+    message_id = TextField(null=True)
+
+class BalanceHistory(BaseModel):
+    user = ForeignKeyField(User, backref='balance_history')
+    guild = IntegerField()
+    gold = IntegerField(null=False)
+    date = DateTimeField(default=datetime.utcnow(), null=False)
+
 
 db.connect()
-db.create_tables([User, UserGuildStats, UserBet])
+db.create_tables([User, UserGuildStats, UserBet, BalanceHistory])
 
 def init_user_stats(user, guild):
     try:
@@ -60,6 +72,10 @@ def add_user_gold(user_id, guild_id, amount):
         (UserGuildStats.update(gold=UserGuildStats.gold + amount)
             .where(UserGuildStats.user == user_id,
                    UserGuildStats.guild == guild_id).execute())
+
+        user_guild_stats = (UserGuildStats.select(UserGuildStats.user, UserGuildStats.guild, UserGuildStats.gold)
+                            .where(UserGuildStats.user == user_id, UserGuildStats.guild == guild_id).execute())[0]
+        BalanceHistory.create(user=user_guild_stats.user.id, guild=user_guild_stats.guild, gold=user_guild_stats.gold)
     except Exception as e:
         log.error(e)
 
@@ -133,6 +149,13 @@ def get_users():
         print(err)
 
 
+def get_users_all():
+    try:
+        return User.select().execute()
+    except Exception as err:
+        log.error(err)
+        print(err)
+
 def delete_most_recent_bet(user_id, guild_id):
     try:
         bet = ((UserBet.select().where(UserBet.user == user_id,
@@ -190,9 +213,94 @@ def get_balances_by_guild(guild):
         log.error(err)
         print(err)
 
-def resolve_bet_by_id(bet_id):
+def resolve_bet_by_id(bet_id, bet_result):
     try:
-        UserBet.update({UserBet.resolved: True}).where(UserBet.id == bet_id).execute()
+        pass
+        #TODO UserBet.update({UserBet.resolved: True, UserBet.result: bet_result}).where(UserBet.id == bet_id).execute()
     except Exception as err:
         log.error(err)
         print(err)
+
+
+def update_summoner_id(id, summoner_id):
+    try:
+        User.update({User.summoner_id: summoner_id}).where(User.id == id).execute()
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
+def set_message_id_by_target_user(msg_id, bet_target):
+    try:
+        UserBet.update({UserBet.message_id: msg_id}).where(UserBet.bet_target == bet_target, UserBet.game_id.is_null(True), UserBet.message_id.is_null(True)).execute()
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
+def get_pending_bets_by_target(bet_target):
+    try:
+        query = UserBet.select().where((UserBet.resolved == False),
+                                       (UserBet.bet_target == bet_target),
+                                       (UserBet.game_id.is_null(True)))
+        return query
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
+def get_guild_total(guild_id):
+    try:
+        result = (UserGuildStats.select(fn.SUM(UserGuildStats.gold).alias('total'))
+             .where(UserGuildStats.guild == guild_id))[0]
+        return result.total
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
+def get_guild_average(guild_id):
+    try:
+        total = get_guild_total(guild_id)
+        result = (UserGuildStats.select(fn.COUNT(UserGuildStats.user_id).alias('count'))
+                  .where(UserGuildStats.guild == guild_id, UserGuildStats.gold.is_null(False)))[0]
+        return total / result.count
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
+aram_basic_rewards = {
+    "sightWardsBoughtInGame":  {'mult': .002, 'display': 'Sight wards'},
+    "firstBloodKill":  {'mult': .2, 'display': 'First blood'},
+    "killingSprees":  {'mult': .01, 'display': 'Killing sprees'},
+    "unrealKills":  {'mult': 1, 'display': 'Unreal kills'},
+    "firstTowerKill":  {'mult': .02, 'display': 'First tower kill'},
+    "doubleKills":  {'mult': .025, 'display': 'Double kills'},
+    "tripleKills":  {'mult': .1, 'display': 'Triple kills'},
+    "quadraKills":  {'mult': .15, 'display': 'Quadra kills'},
+    "pentaKills":  {'mult': .4, 'display': 'Penta kills'},
+    "visionWardsBoughtInGame":  {'mult': .002, 'display': 'Vision wards bought'},
+    "timeCCingOthers":  {'mult': .002, 'display': 'Time CCing others'},
+}
+
+aram_highest_rewards = {
+    "magicDamageDealtToChampions": {'mult': .02, 'display': 'Best mage'},
+    "totalTimeCrowdControlDealt": {'mult': .02, 'display': 'Most CC'},
+    "longestTimeSpentLiving": {'mult': .02, 'display': 'Longest life'},
+    "physicalDamageDealtToChampions": {'mult': .02, 'display': 'Most physical dmg'},
+    "damageDealtToObjectives": {'mult': .02, 'display': 'Top dmg to objs'},
+    "totalUnitsHealed": {'mult': .02, 'display': 'Best healer'},
+    "totalDamageDealtToChampions": {'mult': .02, 'display': 'King of dmg'},
+    "deaths": {'mult': .02, 'display': 'Feeder lord'},
+    "turretKills": {'mult': .02, 'display': 'Turret slayer'},
+    "goldEarned": {'mult': .02, 'display': 'Top earner'},
+    "killingSprees": {'mult': .02, 'display': 'Serial killer'},
+    "totalHeal": {'mult': .02, 'display': 'Best healer'},
+    "totalMinionsKilled": {'mult': .02, 'display': 'Minion slayer'},
+    "timeCCingOthers": {'mult': .02, 'display': 'Time CCing others'},
+}
+
+
+
+
