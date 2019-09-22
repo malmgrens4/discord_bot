@@ -31,161 +31,122 @@ users = {}
 presence_update_listeners = []
 league_update_listeners = []
 guild_create_listeners = []
-
+bet_window_ms = 180000
 bet_resolve_lock = asyncio.Lock()
 
 #TODO message still goes through even if bet is not initialized (when db is locked)
 # wait for id from bet before saying so.
 
 async def resolve_pending_bets(data=None):
-    # anytime a player's status is set to None we fetch all pending bets and attempt to resolve them
-    # this could be improved by only triggering on players who are known to have bets placed on them
-    # but that would require a db call anyway if we did not want to depend on the cache
-    # a user cannot be paid out twice
-    # async with bet_resolve_lock:
-    #     try:
-    #         pending_bets = db_api.get_pending_bets()
-    #         if not pending_bets:
-    #             return
-    #         for cur_bet in pending_bets:
-    #             try:
-    #                 match_data = league_api.get_match_results(cur_bet.game_id)
-    #                 bet_target_summoner_id = db_api.get_user_summoner_id({'id': cur_bet.bet_target})
-    #                 if not bet_target_summoner_id:
-    #                     log.error('Summoner id not found for bet target %s when one was expected' % (bet.bet_target,))
-    #                     pass
-    #
-    #                 payout = process_bet_results(match_data, bet_target_summoner_id, cur_bet)
-    #                 #gameMode
-    #                 if payout is not None:
-    #                     match_results = get_match_results(match_data, bet_target_summoner_id)
-    #                     #display_bet_stats(match_results)
-    #                     user_id = cur_bet.user
-    #                     guild_id = cur_bet.guild
-    #                     # TODO rollback transaction if both don't go through
-    #                     db_api.add_user_gold(user_id, guild_id, payout)
-    #                     db_api.resolve_bet_by_id(cur_bet.id, bool(match_results['win'])==bool(cur_bet.will_win))
-    #                     message = get_display_bet_stats(cur_bet, match_data, bet_target_summoner_id)
-    #                     await bot.get_channel(cur_bet.channel).send(message)
-    #             except Exception as err:
-    #                 log.error("In loop resolving bets issue ")
-    #                 log.error(err)
-    #                 continue
-    #     except league_api.LeagueRequestError as err:
-    #         log.error("Issue in resolve pending bets")
-    #         log.error(err.message)
-    #         log.error(err.data)
-    #     except Exception as err:
-    #         log.error(err)
+    async with bet_resolve_lock:
+        try:
+            pending_bets = db_api.get_pending_bets()
+            if not pending_bets:
+                return
+            for cur_bet in pending_bets:
+                try:
+                    match_results = league_api.get_match_results(cur_bet.game_id)
+                    bet_target_summoner_id = db_api.get_user_summoner_id({'id': cur_bet.bet_target})
+                    if not bet_target_summoner_id:
+                        log.error('Summoner id not found for bet target %s when one was expected' % (bet.bet_target,))
+                        pass
+
+                    payouts = get_payouts(match_results, bet_target_summoner_id, cur_bet)
+                    # TODO gameMode
+                    # TODO rollback transaction if both don't go through
+                    if payouts is not None:
+                        aramHelper = AramStatHelper(match_results)
+                        did_win = aramHelper.get_stat('win', bet_target_summoner_id)
+
+                        for payout in payouts:
+                            if payout['display'] == 'Total':
+                                total = payout['reward']
+                        if not total:
+                            log.error('total not found')
+                            return
+
+                        prediction_right = did_win==bool(cur_bet.will_win)
+
+                        user_id = cur_bet.user
+                        guild_id = cur_bet.guild
+                        db_api.add_user_gold(user_id, guild_id, total)
+                        db_api.resolve_bet_by_id(cur_bet.id, prediction_right)
+                        message = get_payout_display(prediction_right, cur_bet, payouts)
+                        await bot.get_channel(cur_bet.channel).send(message)
+
+                    else:
+                        #TODO why might payouts be none here, no valid game data?
+                        log.error('Results not found trying to resolve bet %s'%(cur_bet.id,))
+                except Exception as err:
+                    log.error("In loop resolving bets issue ")
+                    log.error(err)
+                    continue
+        except league_api.LeagueRequestError as err:
+            log.error("Issue in resolve pending bets")
+            log.error(err.message)
+            log.error(err.data)
+        except Exception as err:
+            log.error(err)
+
+@bot.command()
+async def avg(ctx):
+    """Returns the average balance of the guild"""
+    await ctx.send(">>> Average gold: " + str(db_api.get_guild_average(ctx.guild.id)))
+
+
+@bot.command()
+async def bank(ctx):
+    """WIP. Returns display of all user balances."""
     pass
 
 
-def create_display_table(headers, rows):
+def create_display_table(headers, rows, col_length=15):
     header_display=''
-    col_length = 15
+    underline = ''
+    bottom = ''
+    side_bar = '|'
     for header in headers:
-        header_display+= str(header).ljust(col_length)
+        header_display+= (side_bar + str(header)).ljust(col_length)
+        underline+= ''.ljust(col_length, '=')
+        bottom+=''.ljust(col_length, '=')
+
     header_display += '\n'
+    underline += '\n'
+    bottom += '\n'
 
     rows_display=''
     for row in rows:
         row_display=''
         for value in row:
-            row_display+= ('|' + str(value)).ljust(col_length)
-        row_display+='\n'
+            row_display+= (side_bar + str(value)).ljust(col_length)
+        row_display+= side_bar + '\n'
         rows_display+=row_display
 
-    return header_display + rows_display
+    return header_display + underline + rows_display + bottom
 
+def get_payout_display(bet_right, cur_bet, bet_results):
+    headers = ['Title', 'Stat', 'Reward']
+    rows = [value.values() for value in bet_results]
+    msg = create_display_table(headers, rows,24)
+    if bet_right:
+        win_text = """
+         _       _______   ___   ____________     
+        | |     / /  _/ | / / | / / ____/ __ \    
+        | | /| / // //  |/ /  |/ / __/ / /_/ /    
+        | |/ |/ // // /|  / /|  / /___/ _, _/     
+        |__/|__/___/_/ |_/_/ |_/_____/_/ |_|""" + '\n\n'
+        msg = win_text + msg
+    else:
+        lose_text = """
+            __    ____  _____ __________ 
+           / /   / __ \/ ___// ____/ __ |
+          / /   / / / /\__ \/ __/ / /_/ /
+         / /___/ /_/ /___/ / /___/ _, _/ 
+        /_____/\____//____/_____/_/ |_|""" + '\n\n'
+        msg = lose_text + msg
 
-def get_bet_payout_display(cur_bet, match_data, bet_target_summoner_id):
-    aram_rewards = db_api.aram_basic_rewards
-
-
-def get_display_bet_stats(cur_bet, match_results, bet_target_summoner_id):
-    results = get_match_results(match_results, bet_target_summoner_id)
-    win_reward = get_win_reward(results['win'], cur_bet.will_win, cur_bet.amount)
-    kill_reward = get_kill_reward(results['kills'], cur_bet.amount)
-    assist_reward = get_assist_reward(results['assists'], cur_bet.amount)
-    death_reward = get_death_reward(results['deaths'], cur_bet.amount)
-    total_reward = process_bet_results(match_results, bet_target_summoner_id, cur_bet)
-
-    # these two need to have the bet amount subtracted to reflect
-    # the actual earnings
-
-    win_reward -= cur_bet.amount
-    total_reward -= cur_bet.amount
-
-
-    win_result_emojis = config['EMOJI_REACTIONS']['win'].split(',') if results['win'] else config['EMOJI_REACTIONS']['lose'].split(',')
-    kills_emojis = config['EMOJI_REACTIONS']['kills'].split(',')
-    assists_emojis = config['EMOJI_REACTIONS']['assists'].split(',')
-    deaths_emojis = config['EMOJI_REACTIONS']['deaths'].split(',')
-
-    description_col_length = 15
-    stat_col_length = 15
-
-    def multi_kill_display():
-        multi_kill_string = ''
-        if results['doubleKills'] != 0:
-            multi_kill_string+='double kills'.ljust(description_col_length) + '| ' + str(results['doubleKills']).ljust(stat_col_length) + '| '\
-            + str(get_multi_kill_reward('double', results['doubleKills'], cur_bet.amount)).ljust(stat_col_length) + '\n'
-
-        if results['tripleKills'] != 0:
-            multi_kill_string+='triple kills'.ljust(description_col_length) + '| ' + str(results['tripleKills']).ljust(stat_col_length) + '| '\
-            + str(get_multi_kill_reward('triple', results['tripleKills'], cur_bet.amount)).ljust(stat_col_length) + '\n'
-
-        if results['quadraKills'] != 0:
-            multi_kill_string+='quadra kills'.ljust(description_col_length) + '| ' + str(results['quadraKills']).ljust(stat_col_length) + '| '\
-            + str(get_multi_kill_reward('quadra', results['quadraKills'], cur_bet.amount)).ljust(stat_col_length) + '\n'
-
-        if results['pentaKills'] != 0:
-            multi_kill_string+='penta kills'.ljust(description_col_length) + '| ' + str(results['pentaKills']).ljust(stat_col_length) + '| '\
-            + str(get_multi_kill_reward('penta', results['pentaKills'], cur_bet.amount)).ljust(stat_col_length) + '\n'
-
-        if results['unrealKills'] != 0:
-            multi_kill_string+='unreal kills'.ljust(description_col_length) + '| ' + str(results['unrealKills']).ljust(stat_col_length) + '| '\
-            + str(get_multi_kill_reward('unreal', results['unrealKills'], cur_bet.amount)).ljust(stat_col_length) + '\n'
-
-        return multi_kill_string
-
-
-    def most_healing_display():
-        if results['top_healing']:
-            return 'most healing'.ljust(description_col_length) + '| ' + format_number(results['totalHeal']).ljust(stat_col_length) + '| ' + str(get_highest_heal_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
-        return ''
-
-    def most_damage_to_champs_display():
-        if results['top_damage_dealt']:
-            return 'top dmg dealt'.ljust(description_col_length) + '| ' + format_number(results['totalDamageDealt']).ljust(stat_col_length) + '| ' + str(get_highest_damage_to_champs_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
-        return ''
-
-    def most_damage_taken_display():
-        if results['top_damage_taken']:
-            return 'top dmg taken'.ljust(description_col_length) + '| ' + format_number(results['totalDamageTaken']).ljust(stat_col_length) + '| ' + str(get_highest_damage_taken_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
-        return ''
-
-    def most_gold_earned_display():
-        if results['top_gold_earned']:
-            return 'most gold'.ljust(description_col_length) + '| ' + format_number(results['goldEarned']).ljust(stat_col_length) + '| ' + str(get_highest_gold_earned_reward(cur_bet.amount)).ljust(stat_col_length) + '\n'
-        return ''
-
-    message = '```' + str(db_api.get_username_by_id(cur_bet.user)) + ' bet ' + format_number(cur_bet.amount) + ' on ' + str(db_api.get_username_by_id(cur_bet.bet_target)) + '\n' \
-      + 'category'.ljust(description_col_length) + '| ' + 'stats'.ljust(stat_col_length) + '| ' + 'reward'.ljust(stat_col_length) + '\n' \
-      + 'win'.ljust(description_col_length) + '| ' + ''.ljust(stat_col_length) + '| ' + format_number(win_reward).ljust(stat_col_length) + '\n' \
-      + 'kills'.ljust(description_col_length) + '| ' + format_number(results['kills']).ljust(stat_col_length) + '| ' + format_number(kill_reward).ljust(stat_col_length) + '\n' \
-      + 'assists'.ljust(description_col_length) + '| ' + format_number(results['assists']).ljust(stat_col_length) + '| ' + format_number(assist_reward).ljust(stat_col_length) + '\n' \
-      + 'deaths'.ljust(description_col_length) + '| ' + format_number(results['deaths']).ljust(stat_col_length) + '| ' + format_number(death_reward).ljust(stat_col_length) + '\n' \
-      + multi_kill_display() \
-      + most_healing_display() \
-      + most_damage_to_champs_display() \
-      + most_damage_taken_display() \
-      + most_gold_earned_display() \
-      + 'total'.ljust(description_col_length) + '| ' + ''.ljust(stat_col_length) + '| ' + format_number(total_reward).ljust(stat_col_length) + '\n' + '```'
-
-    return message
-
-
+    header = ">>> <@!%s> bet on <@!%s> for %s"%(cur_bet.user_id, cur_bet.bet_target, cur_bet.amount)
+    return header + "```" + msg + "```"
 
 def format_number(value):
     return str('{:,}'.format(value))
@@ -268,6 +229,14 @@ class AramStatHelper:
     def is_highest_in_game(self, key, summoner_id):
         return self.get_stat(key, summoner_id) == max([stat[key] for stat in self.get_all_stats()])
 
+    def is_lowest_in_game(self, key, summoner_id):
+        #TODO 0 case
+        return self.get_stat(key, summoner_id) == min([stat[key] for stat in self.get_all_stats() if stat[key]!=0])
+
+    def is_lowest_on_team(self, key, summoner_id):
+        # TODO 0 case
+        return self.get_stat(key, summoner_id) == min([stat[key] for stat in self.get_team_stats(summoner_id) if stat[key]!=0])
+
     def get_stat(self, key, summoner_id):
         return self.get_stats(summoner_id)[key]
 
@@ -312,108 +281,86 @@ class AramStatHelper:
 @bot.command()
 async def run_payout(ctx):
     for cur_bet in db_api.get_pending_bets():
-        #sum_id = db_api.get_user_summoner_id(cur_bet.bet_target)
+        #TODO sum_id = db_api.get_user_summoner_id(cur_bet.bet_target)
         sum_id = 'DTSaOdp8ELyIztVLbi9gKEEaUvIGOvupWyiuJqisjaqCc-U'
         # TODO make a unique set before requesting
         match_results = league_api.get_match_results(cur_bet.game_id)
-        print(get_payouts(match_results, sum_id, cur_bet))
+        await ctx.send('```' + get_payout_display(True, get_payouts(match_results, sum_id, cur_bet)) + '```')
 
 
 
 def get_payouts(match_results, sum_id, cur_bet):
     """Returns dict containing the title and amount of a payout reward for a given game based off of the summoner"""
     aramHelper = AramStatHelper(match_results)
-    guild_average = db_api.get_guild_average(cur_bet.guild)
-    flat_bonus = guild_average/100
+    flat_bonus = db_api.get_guild_bonus(cur_bet.guild)
+
+
+    ka_mult = (aramHelper.get_stat('kills', sum_id))/(aramHelper.get_team_total_by_stat('kills', sum_id))
 
     def ka_payout():
         assist_mult = .5
-        ka = (((aramHelper.get_stat('kills', sum_id) * flat_bonus) + (assist_mult * aramHelper.get_stat('assists', sum_id) * flat_bonus)) *
-             ((aramHelper.get_stat('kills', sum_id))/(aramHelper.get_team_total_by_stat('kills', sum_id))))
+        ka = (((aramHelper.get_stat('kills', sum_id) * flat_bonus) + (assist_mult * aramHelper.get_stat('assists', sum_id) * flat_bonus)) * ka_mult)
         return ka
 
+    death_mult =  ((aramHelper.get_stat('deaths', sum_id) * 5) / aramHelper.get_team_total_by_stat('kills', sum_id, False))
+
     def death_payout():
-        deaths = -((aramHelper.get_stat('deaths', sum_id) * flat_bonus) *
-                   ((aramHelper.get_stat('deaths', sum_id) * 5) / aramHelper.get_team_total_by_stat('kills', sum_id, False)))
+        deaths = -((aramHelper.get_stat('deaths', sum_id) * flat_bonus) * death_mult)
+
         return deaths
 
     def win_payout():
         did_win = aramHelper.get_stat('win', sum_id)
         return 2 * cur_bet.amount if did_win == cur_bet.will_win else 0
 
-    ka = {'Kills/Assists': ka_payout()}
-    deaths = {'Deaths' : death_payout()}
-    win = {'Win': win_payout()}
+
+    def format_mult(mult, value):
+        if isinstance(value, bool):
+            return str(mult)
+        return str(mult) + ' x ' + ('%.2f'%value if value % 1 else str(value))
+
+    ka = {'display': 'Kills/Assists', 'mult': str(aramHelper.get_stat('kills', sum_id)) + '/'
+                                              + str(aramHelper.get_stat('assists', sum_id))
+                                              + ' x ' + format_mult(flat_bonus, ka_mult)
+                                    , 'reward': ka_payout()}
+
+    deaths = {'display': 'Deaths', 'mult': format_mult(-1, aramHelper.get_stat('deaths', sum_id))
+                       + ' x ' + format_mult(flat_bonus, death_mult), 'reward': death_payout()}
+    win = {'display': 'Win', 'mult': '', 'reward': win_payout()}
 
     payouts = [win, ka, deaths]
 
     for key, value in db_api.aram_basic_rewards.items():
         #TODO not sure when, but maybe 0 is a good thing (damageTaken???)
-        if aramHelper.get_stat(key, sum_id) != 0:
+        stat = aramHelper.get_stat(key, sum_id)
+        if  stat != 0:
             payouts.append({'display': value['display'],
-                            'mult': value['mult'],
-                            'reward': (value['mult'] * aramHelper.get_stat(key, sum_id) * flat_bonus)})
+                            'mult': format_mult(value['mult'], stat) + ' x ' + str(flat_bonus),
+                            'reward': (value['mult'] * stat * flat_bonus)})
 
     for key, value in db_api.aram_highest_rewards.items():
         if aramHelper.is_highest_in_game(key, sum_id):
             payouts.append({'display': value['display'],
-                            'mult': value['mult'],
+                            'mult': str(value['mult']) + ' x ' + str(flat_bonus),
                             'reward': (value['mult'] * flat_bonus)})
 
+
+    for key, value in db_api.aram_lowest_rewards.items():
+        if aramHelper.is_lowest_in_game(key, sum_id):
+            payouts.append({'display': value['display'],
+                            'mult': str(value['mult']) + ' x ' + str(flat_bonus),
+                            'reward': (value['mult'] * flat_bonus)})
+
+
+    total = {'display': 'Total', 'mult': '', 'reward': 0}
+    for payout in payouts:
+        reward_to_int = int(payout['reward'])
+        payout['reward'] = reward_to_int
+        total['reward'] += reward_to_int
+
+    payouts.append(total)
+
     return payouts
-
-
-def process_bet_results(match_results, bet_target_summoner_id, cur_bet):
-
-    reward = 0
-    results = get_match_results(match_results, bet_target_summoner_id)
-    if not results:
-        log.error('user not found when expected while processing results')
-        log.error(cur_bet)
-        return
-
-    reward += get_win_reward(cur_bet.will_win, results['win'], cur_bet.amount)
-    reward += get_kill_reward(results['kills'], cur_bet.amount)
-    reward += get_assist_reward(results['assists'], cur_bet.amount)
-    reward += get_death_reward(results['deaths'], cur_bet.amount)
-    reward += sum([get_multi_kill_reward(multi[0], results[multi[1]], cur_bet.amount) for multi in
-               [('double', 'doubleKills'), ('triple', 'tripleKills'), ('quadra', 'quadraKills'), ('penta', 'pentaKills'), ('unreal', 'unrealKills')]])
-    reward += get_highest_heal_reward(cur_bet.amount)
-    reward += get_highest_damage_to_champs_reward(cur_bet.amount)
-    reward += get_highest_damage_taken_reward(cur_bet.amount)
-    reward += get_highest_gold_earned_reward(cur_bet.amount)
-    return reward
-
-
-
-def get_match_results(match_results, summoner_id):
-
-    participant_id = None
-    stats = None
-    if not match_results.get('participantIdentities'):
-        return
-    for participant_ids in match_results.get('participantIdentities'):
-        player = participant_ids['player']
-        if player['summonerId'] == summoner_id:
-            participant_id = participant_ids['participantId']
-
-    if not participant_id:
-        log.error('Parse match data was passed a user that was not found in the target game')
-
-    max_healing = max([participant['stats']['totalHeal'] for participant in match_results['participants']])
-    max_gold_earned = max([participant['stats']['goldEarned'] for participant in match_results['participants']])
-    max_damage_to_champs = max([participant['stats']['totalDamageDealt'] for participant in match_results['participants']])
-    max_damage_taken = max([participant['stats']['totalDamageTaken'] for participant in match_results['participants']])
-
-    for participant in match_results['participants']:
-        if participant['participantId'] == participant_id:
-            stats = participant['stats']
-            stats['top_healing'] = stats['totalHeal'] == max_healing
-            stats['top_gold_earned'] = stats['goldEarned'] == max_gold_earned
-            stats['top_damage_dealt'] = stats['totalDamageDealt'] == max_damage_to_champs
-            stats['top_damage_taken'] = stats['totalDamageTaken'] == max_damage_taken
-
-    return stats
 
 
 async def process_discord_data_for_league_bet(data):
@@ -461,14 +408,12 @@ async def league_api_updates():
                     log.error(err)
 
 
-
-
 async def set_game_for_pending_bets(user_id, active_match):
     try:
-        if int(round(time.time() * 1000)) - (active_match['gameStartTime']) < 180000:
+        if int(round(time.time() * 1000)) - (active_match['gameStartTime']) < bet_window_ms:
 
             # get all message ids with that bet target and edit the message to include a checkmark
-            bets_to_be_resolved = db_api.get_pending_bets_by_target(user_id)
+            bets_to_be_resolved = db_api.get_new_bets_by_target(user_id)
 
             for pending_bet in bets_to_be_resolved:
                 for channel in bot.get_all_channels():
@@ -482,15 +427,112 @@ async def set_game_for_pending_bets(user_id, active_match):
             db_api.set_bet_game_id({'game_id': active_match["gameId"],
                                     'bet_target': user_id})
 
-
-
-
-
-
-
     except Exception as err:
         log.error('issue setting game for pending bets.')
         log.error(err)
+
+
+class TimerDisplay:
+
+    def __init__(self, game_id, channel, message, users, game_start_time):
+        self.message = message
+        self.game = game_id
+        self.game_start_time = game_start_time
+        self.channel = channel
+        self.users = users
+
+    async def update(self):
+        self.time_left = bet_window_ms - ((round(time.time() * 1000)) - self.game_start_time)
+        if self.time_left <= 0:
+            for channel in bot.get_all_channels():
+                try:
+                    if channel.id == self.channel:
+                        time_left_msg = await channel.fetch_message(self.message.id)
+                        await time_left_msg.edit(content='Betting is closed for %s.'%(self.users,))
+                except Exception as err:
+                    print(err)
+                    continue
+            return False
+
+        mins, secs = divmod(int(self.time_left/1000), 60)
+        timeformat = '{:02d}:{:02d}'.format(mins, secs)
+
+        for channel in bot.get_all_channels():
+            try:
+                if channel.id == self.channel:
+                    time_left_msg = await channel.fetch_message(self.message.id)
+                    new_msg = '%s left to bet for %s'%(timeformat, [display_username(user) for user in self.users])
+                    await time_left_msg.edit(content=new_msg)
+            except Exception as err:
+                print(err)
+                continue
+
+
+        return True
+
+
+
+def display_username(user_id):
+    return '<@!%s>'%user_id
+
+timer_displays = []
+
+async def display_bet_windows():
+
+    while True:
+        try:
+            # get each game being bet on
+            # see if any are below the time threshold
+            # if there are see if a message for it already exists
+            # otherwise: create a new message to display it.
+            await asyncio.sleep(1)
+            pending_bets = db_api.get_pending_bets()
+
+            # collect all users the game applies to.
+
+            bet_display_set = []
+            for p_bet in pending_bets:
+                # if the display for this unique game channel set does not exist create one.
+                if not bet_display_set or (p_bet.channel not in bet_display_set and p_bet.game_id not in bet_display_set):
+                    bet_display_set.append({'game': p_bet.game_id, 'channel': p_bet.channel, 'users': [p_bet.bet_target.id]})
+                else:
+                    # since we know it exists update the users for that display set.
+                    for display in bet_display_set:
+                        if display['game'] and display['channel'] and (p_bet.bet_target not in display['users']):
+                            display['users'].append(p_bet.bet_target.id)
+
+            # need to be able to update the timers to display the usernames
+            for display in bet_display_set:
+                if not timer_displays:
+                    # Create a message to pass to the timer.
+                    if bot.get_channel(display['channel']):
+
+                        sum_id = db_api.get_user_summoner_id({'id': display['users'][0]})
+                        game_start_time = league_api.get_player_current_match(sum_id)['gameStartTime']
+                        if game_start_time:
+                            message_id = await bot.get_channel(display['channel']).send('Time until betting is closed for %s' % ([display_username(user_id) for user_id in display['users']]))
+                            timer_displays.append(TimerDisplay(display['game'], display['channel'], message_id, display['users'], game_start_time))
+
+                for timer in timer_displays:
+                    if timer.channel != display['channel'] and timer.game != display['game']:
+
+                        sum_id = db_api.get_user_summoner_id({'id': display['users'][0]})
+                        game_start_time = league_api.get_player_current_match(sum_id)['gameStartTime']
+                        if game_start_time:
+                            message_id = await bot.get_channel(display['channel']).send('Time until betting is closed for %s' % ([display_username(user_id) for user_id in display['users']]))
+                            timer_displays.append(TimerDisplay(display['game'], display['channel'], message_id, display['users'], game_start_time))
+
+                    else:
+                        timer.users = display['users']
+
+            for timer in timer_displays:
+                if not await timer.update():
+                    timer_displays.remove(timer)
+
+        except Exception as err:
+            log.error(err)
+            log.error('Timer issue')
+
 
 
 @bot.command()
@@ -502,7 +544,7 @@ async def bets(ctx):
 async def display_all_bets(ctx):
     placed_bets = db_api.get_placed_bets(ctx.author.id, ctx.guild.id)
     if not placed_bets:
-        await ctx.send('You have no bets placed. Use !help to see an example.')
+        await ctx.send('>>> You have no bets placed. Use !help to see an example.')
         return
     await ctx.send(get_bet_display(placed_bets))
 
@@ -537,6 +579,8 @@ def format_bet(cur_bet, name_col, win_col, amount_col):
 
 def init_user_info_cache(data):
     #TODO create update listeners for when new people are added to the server
+    db_api.create_guild(data['id'])
+
     for member in data['members']:
         user = member['user']
         users[user['id']] = user
@@ -572,10 +616,14 @@ def push_bet_to_db(bet_owner, guild_id, channel_id, target_user, game_name, will
         log.error('Issue pushing bet to DB')
         log.error(e)
 
+async def set_flat_bonus(user_id=None):
+    if not db_api.get_pending_bets():
+        db_api.set_guild_bonus()
+
 guild_create_listeners = [init_user_info_cache]
-presence_update_listeners = [set_user_state, process_discord_data_for_league_bet, resolve_pending_bets]
+#presence_update_listeners = [set_user_state, process_discord_data_for_league_bet, resolve_pending_bets]
 league_match_listeners = [set_game_for_pending_bets]
-league_not_in_match_listeners = [resolve_pending_bets]
+league_not_in_match_listeners = [resolve_pending_bets, set_flat_bonus]
 
 """COMMANDS"""
 @bot.command()
@@ -597,6 +645,8 @@ async def cancel_bet(ctx):
     if cur_bet:
         db_api.add_user_gold(ctx.author.id, ctx.guild.id, cur_bet.amount)
         await ctx.send('>>> Bet successfully canceled. %s gold doubloons added back to your account.'%(format_number(cur_bet.amount),))
+    else:
+        await ctx.send('>>> No bets available to be canceled.')
     await display_all_bets(ctx)
 
 @bot.command()
@@ -625,20 +675,21 @@ async def bet(ctx, target_user: str, win: str, amount: str):
         ctx.send('Must bet amount greater than 0.')
         return
 
-
     if user_stats.gold <= 10:
         # TODO case where user already has a bet placed
-        await ctx.send('''Oh, you're poor. Here's a bet of 10, purely from pity''')
-        if user_stats.gold <= 0:
-            amount = 10
-            pity_flag = True
+        pending_bets = db_api.get_new_bets_by_target(target_user)
+        if not pending_bets:
+            await ctx.send('''Oh, you're poor. Here's a bet of 10, purely from pity''')
+            if user_stats.gold <= 0:
+                amount = 10
+                pity_flag = True
 
     elif user_stats.gold < amount:
         await ctx.send('''Insufficient funds for bet %s.'''%(db_api.get_username_by_id(ctx.author.id),))
         return
 
     elif amount < int(min_bet_percent * user_stats.gold):
-        await ctx.send('''Minimum bet required is %s'''%(int(format_number(user_stats.gold * min_bet_percent))))
+        await ctx.send('''Minimum bet required is %s'''%(format_number(int(user_stats.gold * min_bet_percent))))
         return
 
     bet_target = ''.join([i for i in target_user if i.isdigit()])
@@ -653,7 +704,7 @@ async def bet(ctx, target_user: str, win: str, amount: str):
                    bet_target, 'League of Legends', will_win, amount)
     if not pity_flag:
         db_api.sub_user_gold(ctx.author.id, ctx.guild.id, amount)
-    conf_msg = await ctx.send('Bet that %s will %s for %s in League of Legos' % (users[bet_target]['username'], win, amount))
+    conf_msg = await ctx.send('Bet that %s will %s for %s in League of Legos' % (users[bet_target]['username'], win, format_number(amount)))
     db_api.set_message_id_by_target_user(conf_msg.id, bet_target)
 
 
@@ -726,7 +777,7 @@ async def heartbeat(ws, interval, last_sequence):
 
 
 loop = asyncio.get_event_loop()
-loop.run_until_complete(asyncio.gather(*[websocket_start(), bot.start(TOKEN), league_api_updates()]))
+loop.run_until_complete(asyncio.gather(*[websocket_start(), bot.start(TOKEN), league_api_updates(), display_bet_windows()]))
 loop.close()
 
 

@@ -14,8 +14,6 @@ log = logging.getLogger(__name__)
 db = SqliteDatabase(config['DEFAULT']['database_path'])
 
 
-
-
 # So we don't have to redefine the db every time
 class BaseModel(Model):
     class Meta:
@@ -32,7 +30,7 @@ class User(BaseModel):
 class UserGuildStats(BaseModel):
     guild = IntegerField(null=False)
     user = ForeignKeyField(User, backref='guild_stats')
-    gold = IntegerField(default=0, null=False)
+    gold = IntegerField(null=True)
 
     class Meta:
         primary_key = CompositeKey('guild', 'user')
@@ -57,8 +55,13 @@ class BalanceHistory(BaseModel):
     date = DateTimeField(default=datetime.utcnow(), null=False)
 
 
+class Guild(BaseModel):
+    id = PrimaryKeyField()
+    bonus = IntegerField(null=True)
+
+
 db.connect()
-db.create_tables([User, UserGuildStats, UserBet, BalanceHistory])
+db.create_tables([Guild, User, UserGuildStats, UserBet, BalanceHistory])
 
 def init_user_stats(user, guild):
     try:
@@ -215,8 +218,7 @@ def get_balances_by_guild(guild):
 
 def resolve_bet_by_id(bet_id, bet_result):
     try:
-        pass
-        #TODO UserBet.update({UserBet.resolved: True, UserBet.result: bet_result}).where(UserBet.id == bet_id).execute()
+        UserBet.update({UserBet.resolved: True, UserBet.result: bet_result}).where(UserBet.id == bet_id).execute()
     except Exception as err:
         log.error(err)
         print(err)
@@ -238,7 +240,7 @@ def set_message_id_by_target_user(msg_id, bet_target):
         print(err)
 
 
-def get_pending_bets_by_target(bet_target):
+def get_new_bets_by_target(bet_target):
     try:
         query = UserBet.select().where((UserBet.resolved == False),
                                        (UserBet.bet_target == bet_target),
@@ -269,6 +271,28 @@ def get_guild_average(guild_id):
         log.error(err)
         print(err)
 
+def get_guild_bonus(guild_id):
+    try:
+        return Guild.select(Guild.bonus).where(Guild.id == guild_id)[0].bonus
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+def set_guild_bonus():
+
+    try:
+        for guild in Guild.select(Guild.id):
+            Guild.update(bonus=(int(get_guild_average(guild)/100))).where(Guild.id==guild).execute()
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+def create_guild(id):
+    try:
+        Guild.create(id=id)
+    except Exception as err:
+        log.error(err)
+        print(err)
 
 aram_basic_rewards = {
     "sightWardsBoughtInGame":  {'mult': .002, 'display': 'Sight wards'},
@@ -281,14 +305,14 @@ aram_basic_rewards = {
     "quadraKills":  {'mult': .15, 'display': 'Quadra kills'},
     "pentaKills":  {'mult': .4, 'display': 'Penta kills'},
     "visionWardsBoughtInGame":  {'mult': .002, 'display': 'Vision wards bought'},
-    "timeCCingOthers":  {'mult': .002, 'display': 'Time CCing others'},
+    "timeCCingOthers":  {'mult': .002, 'display': 'Total CC (s)'},
 }
 
 aram_highest_rewards = {
     "magicDamageDealtToChampions": {'mult': .02, 'display': 'Best mage'},
     "totalTimeCrowdControlDealt": {'mult': .02, 'display': 'Most CC'},
     "longestTimeSpentLiving": {'mult': .02, 'display': 'Longest life'},
-    "physicalDamageDealtToChampions": {'mult': .02, 'display': 'Most physical dmg'},
+    "physicalDamageDealtToChampions": {'mult': .02, 'display': 'Most phys dmg'},
     "damageDealtToObjectives": {'mult': .02, 'display': 'Top dmg to objs'},
     "totalUnitsHealed": {'mult': .02, 'display': 'Best healer'},
     "totalDamageDealtToChampions": {'mult': .02, 'display': 'King of dmg'},
@@ -298,7 +322,15 @@ aram_highest_rewards = {
     "killingSprees": {'mult': .02, 'display': 'Serial killer'},
     "totalHeal": {'mult': .02, 'display': 'Best healer'},
     "totalMinionsKilled": {'mult': .02, 'display': 'Minion slayer'},
-    "timeCCingOthers": {'mult': .02, 'display': 'Time CCing others'},
+    "timeCCingOthers": {'mult': .02, 'display': 'King Pin (CC)'},
+}
+
+aram_lowest_rewards = {
+    "longestTimeSpentLiving": {'mult': -.02, 'display': 'Shortest life'},
+    "damageDealtToObjectives": {'mult': -.02, 'display': 'Btm dmg to obj'},
+    "deaths": {'mult': .02, 'display': 'Least deaths'},
+    "goldEarned": {'mult': -.02, 'display': 'Dead broke'},
+    "totalMinionsKilled": {'mult': -.02, 'display': 'Minion apologist'},
 }
 
 

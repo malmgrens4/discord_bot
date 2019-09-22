@@ -66,3 +66,4 @@ def update_summoner_ids():
         db_api.update_summoner_id(user.id, sum_data["id"])
 
 
+
