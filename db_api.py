@@ -210,7 +210,9 @@ def get_pending_bets():
 
 def get_balances_by_guild(guild):
     try:
-        query = UserGuildStats.select().where(UserGuildStats.guild == guild)
+        query = UserGuildStats.select(User.username, UserGuildStats.gold)\
+                            .join(User)\
+                            .where(UserGuildStats.guild == guild)
         return [row for row in query]
     except Exception as err:
         log.error(err)
@@ -295,42 +297,42 @@ def create_guild(id):
         print(err)
 
 aram_basic_rewards = {
-    "sightWardsBoughtInGame":  {'mult': .002, 'display': 'Sight wards'},
+    "sightWardsBoughtInGame":  {'mult': .005, 'display': 'Sight wards'},
     "firstBloodKill":  {'mult': .2, 'display': 'First blood'},
-    "killingSprees":  {'mult': .01, 'display': 'Killing sprees'},
+    "killingSprees":  {'mult': .05, 'display': 'Killing sprees'},
     "unrealKills":  {'mult': 1, 'display': 'Unreal kills'},
-    "firstTowerKill":  {'mult': .02, 'display': 'First tower kill'},
-    "doubleKills":  {'mult': .025, 'display': 'Double kills'},
-    "tripleKills":  {'mult': .1, 'display': 'Triple kills'},
-    "quadraKills":  {'mult': .15, 'display': 'Quadra kills'},
-    "pentaKills":  {'mult': .4, 'display': 'Penta kills'},
-    "visionWardsBoughtInGame":  {'mult': .002, 'display': 'Vision wards bought'},
-    "timeCCingOthers":  {'mult': .002, 'display': 'Total CC (s)'},
+    "firstTowerKill":  {'mult': .01, 'display': 'First tower kill'},
+    "doubleKills":  {'mult': .075, 'display': 'Double kills'},
+    "tripleKills":  {'mult': .15, 'display': 'Triple kills'},
+    "quadraKills":  {'mult': .20, 'display': 'Quadra kills'},
+    "pentaKills":  {'mult': .5, 'display': 'Penta kills'},
+    "visionWardsBoughtInGame":  {'mult': .005, 'display': 'Vision wards bought'},
+    "timeCCingOthers":  {'mult': .005, 'display': 'Total CC (s)'},
 }
 
 aram_highest_rewards = {
-    "magicDamageDealtToChampions": {'mult': .02, 'display': 'Best mage'},
-    "totalTimeCrowdControlDealt": {'mult': .02, 'display': 'Most CC'},
-    "longestTimeSpentLiving": {'mult': .02, 'display': 'Longest life'},
-    "physicalDamageDealtToChampions": {'mult': .02, 'display': 'Most phys dmg'},
-    "damageDealtToObjectives": {'mult': .02, 'display': 'Top dmg to objs'},
-    "totalUnitsHealed": {'mult': .02, 'display': 'Best healer'},
-    "totalDamageDealtToChampions": {'mult': .02, 'display': 'King of dmg'},
-    "deaths": {'mult': .02, 'display': 'Feeder lord'},
-    "turretKills": {'mult': .02, 'display': 'Turret slayer'},
-    "goldEarned": {'mult': .02, 'display': 'Top earner'},
-    "killingSprees": {'mult': .02, 'display': 'Serial killer'},
-    "totalHeal": {'mult': .02, 'display': 'Best healer'},
-    "totalMinionsKilled": {'mult': .02, 'display': 'Minion slayer'},
-    "timeCCingOthers": {'mult': .02, 'display': 'King Pin (CC)'},
+    "magicDamageDealtToChampions": {'mult': .05, 'display': 'Best mage'},
+    "totalTimeCrowdControlDealt": {'mult': .1, 'display': 'Most CC'},
+    "longestTimeSpentLiving": {'mult': .075, 'display': 'Longest life'},
+    "physicalDamageDealtToChampions": {'mult': .05, 'display': 'Most phys dmg'},
+    "damageDealtToObjectives": {'mult': .1, 'display': 'Top dmg to objs'},
+    "totalUnitsHealed": {'mult': .2, 'display': 'Best healer'},
+    "totalDamageDealtToChampions": {'mult': .2, 'display': 'King of dmg'},
+    "turretKills": {'mult': .05, 'display': 'Turret slayer'},
+    "goldEarned": {'mult': .1, 'display': 'Top earner'},
+    "killingSprees": {'mult': .1, 'display': 'Serial killer'},
+    "totalHeal": {'mult': .2, 'display': 'Best healer'},
+    "totalMinionsKilled": {'mult': .1, 'display': 'Minion slayer'},
+    "timeCCingOthers": {'mult': .1, 'display': 'King Pin (CC)'},
+    "deaths": {'mult': -.1, 'display': 'Feeder lord'},
 }
 
 aram_lowest_rewards = {
-    "longestTimeSpentLiving": {'mult': -.02, 'display': 'Shortest life'},
-    "damageDealtToObjectives": {'mult': -.02, 'display': 'Btm dmg to obj'},
-    "deaths": {'mult': .02, 'display': 'Least deaths'},
-    "goldEarned": {'mult': -.02, 'display': 'Dead broke'},
-    "totalMinionsKilled": {'mult': -.02, 'display': 'Minion apologist'},
+    "longestTimeSpentLiving": {'mult': -.1, 'display': 'Shortest life'},
+    "damageDealtToObjectives": {'mult': -.1, 'display': 'Btm dmg to obj'},
+    "deaths": {'mult': .05, 'display': 'Least deaths'},
+    "goldEarned": {'mult': -.05, 'display': 'Dead broke'},
+    "totalMinionsKilled": {'mult': -.01, 'display': 'Minion apologist'},
 }
 
 

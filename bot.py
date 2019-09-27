@@ -9,6 +9,8 @@ import aiohttp
 import json
 import league_api
 import time
+from PIL import Image, ImageFont, ImageDraw
+import numpy as np
 
 from random import randint
 from discord.ext import commands
@@ -38,6 +40,7 @@ bet_resolve_lock = asyncio.Lock()
 # wait for id from bet before saying so.
 
 async def resolve_pending_bets(data=None):
+
     async with bet_resolve_lock:
         try:
             pending_bets = db_api.get_pending_bets()
@@ -69,7 +72,9 @@ async def resolve_pending_bets(data=None):
 
                         user_id = cur_bet.user
                         guild_id = cur_bet.guild
+
                         db_api.add_user_gold(user_id, guild_id, total)
+                        await clear_timers()
                         db_api.resolve_bet_by_id(cur_bet.id, prediction_right)
                         message = get_payout_display(prediction_right, cur_bet, payouts)
                         await bot.get_channel(cur_bet.channel).send(message)
@@ -88,6 +93,13 @@ async def resolve_pending_bets(data=None):
         except Exception as err:
             log.error(err)
 
+
+async def clear_timers():
+    for timer in timer_displays:
+        if not await timer.update():
+            timer_displays.remove(timer)
+
+
 @bot.command()
 async def avg(ctx):
     """Returns the average balance of the guild"""
@@ -96,8 +108,15 @@ async def avg(ctx):
 
 @bot.command()
 async def bank(ctx):
-    """WIP. Returns display of all user balances."""
-    pass
+    """Returns display of all user balances."""
+    balances = db_api.get_balances_by_guild(ctx.guild.id)
+    display_rows = []
+    for balance in balances:
+        row = [balance.user.username, format_number(balance.gold)]
+        display_rows.append(row)
+    headers = ["User", "Doubloons"]
+    await ctx.send('```' + create_display_table(headers, display_rows) + '```')
+
 
 
 def create_display_table(headers, rows, col_length=15):
@@ -274,19 +293,10 @@ class AramStatHelper:
         return [stat['stats'] for stat in self.results['participants']]
 
 
+
 #TODO rollback command
 # Create permissions for myself and create a command to roll back a bet - delete it
 # and return the user to their balance prior to the bet
-
-@bot.command()
-async def run_payout(ctx):
-    for cur_bet in db_api.get_pending_bets():
-        #TODO sum_id = db_api.get_user_summoner_id(cur_bet.bet_target)
-        sum_id = 'DTSaOdp8ELyIztVLbi9gKEEaUvIGOvupWyiuJqisjaqCc-U'
-        # TODO make a unique set before requesting
-        match_results = league_api.get_match_results(cur_bet.game_id)
-        await ctx.send('```' + get_payout_display(True, get_payouts(match_results, sum_id, cur_bet)) + '```')
-
 
 
 def get_payouts(match_results, sum_id, cur_bet):
@@ -294,8 +304,7 @@ def get_payouts(match_results, sum_id, cur_bet):
     aramHelper = AramStatHelper(match_results)
     flat_bonus = db_api.get_guild_bonus(cur_bet.guild)
 
-
-    ka_mult = (aramHelper.get_stat('kills', sum_id))/(aramHelper.get_team_total_by_stat('kills', sum_id))
+    ka_mult = (aramHelper.get_stat('kills', sum_id) * 2)/(aramHelper.get_team_total_by_stat('kills', sum_id))
 
     def ka_payout():
         assist_mult = .5
@@ -441,6 +450,7 @@ class TimerDisplay:
         self.channel = channel
         self.users = users
 
+    #TODO add a time bet was placed attribute to make sure people don't miss betting because the API didn't resolve it in time.
     async def update(self):
         self.time_left = bet_window_ms - ((round(time.time() * 1000)) - self.game_start_time)
         if self.time_left <= 0:
@@ -448,7 +458,7 @@ class TimerDisplay:
                 try:
                     if channel.id == self.channel:
                         time_left_msg = await channel.fetch_message(self.message.id)
-                        await time_left_msg.edit(content='Betting is closed for %s.'%(self.users,))
+                        await time_left_msg.edit(content='Betting is closed for %s.'%([display_username(user) for user in self.users],))
                 except Exception as err:
                     print(err)
                     continue
@@ -466,11 +476,12 @@ class TimerDisplay:
             except Exception as err:
                 print(err)
                 continue
-
-
         return True
 
 
+
+def create_game_info_display():
+    pass
 
 def display_username(user_id):
     return '<@!%s>'%user_id
@@ -488,51 +499,119 @@ async def display_bet_windows():
             await asyncio.sleep(1)
             pending_bets = db_api.get_pending_bets()
 
-            # collect all users the game applies to.
 
-            bet_display_set = []
             for p_bet in pending_bets:
-                # if the display for this unique game channel set does not exist create one.
-                if not bet_display_set or (p_bet.channel not in bet_display_set and p_bet.game_id not in bet_display_set):
-                    bet_display_set.append({'game': p_bet.game_id, 'channel': p_bet.channel, 'users': [p_bet.bet_target.id]})
-                else:
-                    # since we know it exists update the users for that display set.
-                    for display in bet_display_set:
-                        if display['game'] and display['channel'] and (p_bet.bet_target not in display['users']):
-                            display['users'].append(p_bet.bet_target.id)
-
-            # need to be able to update the timers to display the usernames
-            for display in bet_display_set:
                 if not timer_displays:
-                    # Create a message to pass to the timer.
-                    if bot.get_channel(display['channel']):
-
-                        sum_id = db_api.get_user_summoner_id({'id': display['users'][0]})
-                        game_start_time = league_api.get_player_current_match(sum_id)['gameStartTime']
-                        if game_start_time:
-                            message_id = await bot.get_channel(display['channel']).send('Time until betting is closed for %s' % ([display_username(user_id) for user_id in display['users']]))
-                            timer_displays.append(TimerDisplay(display['game'], display['channel'], message_id, display['users'], game_start_time))
-
+                    sum_id = db_api.get_user_summoner_id({'id': p_bet.bet_target.id})
+                    live_match_data = league_api.get_player_current_match(sum_id)
+                    if live_match_data:
+                        game_start_time = live_match_data['gameStartTime']
+                        teams = get_match_players(live_match_data)
+                        await send_game_images(p_bet.channel, teams)
+                        message_id = await bot.get_channel(p_bet.channel).send('Time until betting is closed for %s' % ([display_username(p_bet.bet_target.id)]))
+                        timer_displays.append(TimerDisplay(p_bet.game_id, p_bet.channel, message_id, [p_bet.bet_target.id], game_start_time))
                 for timer in timer_displays:
-                    if timer.channel != display['channel'] and timer.game != display['game']:
-
-                        sum_id = db_api.get_user_summoner_id({'id': display['users'][0]})
-                        game_start_time = league_api.get_player_current_match(sum_id)['gameStartTime']
-                        if game_start_time:
-                            message_id = await bot.get_channel(display['channel']).send('Time until betting is closed for %s' % ([display_username(user_id) for user_id in display['users']]))
-                            timer_displays.append(TimerDisplay(display['game'], display['channel'], message_id, display['users'], game_start_time))
+                    if timer.channel != p_bet.channel and timer.game != p_bet.game_id:
+                        sum_id = db_api.get_user_summoner_id({'id': p_bet.bet_target.id})
+                        live_match_data = league_api.get_player_current_match(sum_id)
+                        if live_match_data:
+                            game_start_time = live_match_data['gameStartTime']
+                            teams = get_match_players(live_match_data)
+                            await send_game_images(p_bet.channel, teams)
+                            message_id = await bot.get_channel(p_bet.channel).send('Time until betting is closed for %s' % ([display_username(p_bet.bet_target.id)]))
+                            timer_displays.append(TimerDisplay(p_bet.game_id, p_bet.channel, message_id, [p_bet.bet_target.id], game_start_time))
 
                     else:
-                        timer.users = display['users']
+                        if p_bet.bet_target.id not in timer.users:
+                            timer.users.append(p_bet.bet_target.id)
+
+
+
 
             for timer in timer_displays:
-                if not await timer.update():
-                    timer_displays.remove(timer)
+                await timer.update()
 
         except Exception as err:
             log.error(err)
             log.error('Timer issue')
 
+
+def get_match_players(cur_match_data):
+    # returns two arrays, one for each team.
+
+    teams = {}
+    for participant in cur_match_data['participants']:
+
+        teams.setdefault(participant['teamId'], []).append({'champ': str(participant['championId']), 'player': participant['summonerName']})
+
+    return teams
+
+
+async def send_game_images(channel, teams):
+    try:
+        final_images = []
+        font = ImageFont.truetype("./fonts/Roboto-Black.ttf", 12)
+        vs_font = ImageFont.truetype("./fonts/Roboto-Black.ttf", 30)
+
+        for i, team in enumerate(teams, start=0):
+            team_data = teams[team]
+            team_images = [league_api.get_champ_image_path(participant['champ']) for participant in team_data]
+
+            images = [Image.open(i) for i in team_images]
+            min_shape = sorted([(np.sum(i.size), i.size) for i in images])[0][1]
+            widths, heights = zip(*(i.size for i in images))
+
+            first_team_images = np.hstack((np.asarray(i.resize(min_shape)) for i in images))
+
+            imgs_comb = Image.fromarray(first_team_images)
+            draw = ImageDraw.Draw(imgs_comb)
+
+            cur_width = 0
+            for j, width in enumerate(widths, start=0):
+                if i % 2 == 0:
+                    y = 1
+                else:
+                    y = min_shape[1] - font.size
+
+                participant_name = team_data[j]['player']
+                text_width, text_height = draw.textsize(participant_name)
+                text_x = cur_width + ((width - text_width) / 2)
+                draw.text((text_x + 1, y), participant_name, (0, 0, 0), font=font)
+                draw.text((text_x, y), participant_name, (255, 255, 255), font=font)
+                cur_width += width
+
+            final_images.append(imgs_comb)
+
+        min_shape = sorted([(np.sum(i.size), i.size) for i in final_images])[0][1]
+
+        team_images = np.vstack((np.asarray(i.resize(min_shape)) for i in final_images))
+
+        final_cmb = Image.fromarray(team_images)
+
+        draw = ImageDraw.Draw(final_cmb)
+        width, height = final_cmb.size
+        text_width, text_height = draw.textsize("VS", font=vs_font)
+        text_x = (width - text_width) / 2
+        text_y = (height - text_height) / 2
+        draw.text((text_x + 1, text_y), "VS", (0, 0, 0), font=vs_font)
+        draw.text((text_x, text_y), "VS", (255, 255, 255), font=vs_font)
+
+        final_cmb.save('final.png')
+
+        file = discord.File('./final.png', filename='match.png')
+        await bot.get_channel(channel).send("", files=[file])
+    except Exception as err:
+        print(err)
+        log.error(err)
+        # for participant in team_data:
+        #     path = league_api.get_champ_image_path(participant['champ'])
+        #     if path:
+        #         file = discord.File(path, filename=participant['champ'] + '.png')
+        #         if not file:
+        #             file = discord.File('./img/missing_character.jpeg', filename='whoops.jpeg')
+        #         await bot.get_channel(channel).send(">>> %s as %s"%(participant['player'], participant['champ']), files=[file])
+        # if i==0:
+        #     await bot.get_channel(channel).send('\n VS \n')
 
 
 @bot.command()
@@ -649,11 +728,10 @@ async def cancel_bet(ctx):
         await ctx.send('>>> No bets available to be canceled.')
     await display_all_bets(ctx)
 
-@bot.command()
-async def bet(ctx, target_user: str, win: str, amount: str):
+
+async def instantiate_bet(ctx, target_user: str, win: str, amount: str):
     '''
-    Bet on a league of legends game
-    Ex. !bet @Steven ["win" or "lose"] 500
+    Bet on lol game ex. !bet @Steven ["win" or "lose"] 50
     '''
     # need to have sufficient funds
     # need
@@ -671,10 +749,6 @@ async def bet(ctx, target_user: str, win: str, amount: str):
 
     amount = int(amount)
 
-    if amount <= 0:
-        ctx.send('Must bet amount greater than 0.')
-        return
-
     if user_stats.gold <= 10:
         # TODO case where user already has a bet placed
         pending_bets = db_api.get_new_bets_by_target(target_user)
@@ -683,6 +757,10 @@ async def bet(ctx, target_user: str, win: str, amount: str):
             if user_stats.gold <= 0:
                 amount = 10
                 pity_flag = True
+
+    if amount <= 0:
+        await ctx.send('Must bet amount greater than 0.')
+        return
 
     elif user_stats.gold < amount:
         await ctx.send('''Insufficient funds for bet %s.'''%(db_api.get_username_by_id(ctx.author.id),))
@@ -707,6 +785,17 @@ async def bet(ctx, target_user: str, win: str, amount: str):
     conf_msg = await ctx.send('Bet that %s will %s for %s in League of Legos' % (users[bet_target]['username'], win, format_number(amount)))
     db_api.set_message_id_by_target_user(conf_msg.id, bet_target)
 
+
+@bot.command()
+async def bet(ctx, target_user: str, win: str, amount: str):
+    await instantiate_bet(ctx, target_user, win, amount)
+
+
+@bot.command()
+async def b(ctx, win: str, amount: str):
+    win = 'win' if win == 'w' else 'lose'
+    target_user = display_username(ctx.author.id)
+    await instantiate_bet(ctx, target_user, win, amount)
 
 
 async def api_call(path):

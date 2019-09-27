@@ -17,6 +17,7 @@ league_url = config['LEAGUE_API']['url']
 league_api_key = config['LEAGUE_API']['key']
 region = "NA"
 
+data_dragon_path = """./dragon/9.18.1/"""
 
 class LeagueRequestError(Exception):
     """Exception raised on bad league API requests"""
@@ -64,6 +65,25 @@ def update_summoner_ids():
         r = requests.get(league_url + '/lol/summoner/v4/summoners/by-name/' + user.league_name + '?api_key=' + league_api_key)
         sum_data = r.json()
         db_api.update_summoner_id(user.id, sum_data["id"])
+
+
+def get_champ_image_path(champ_id: str):
+    images_path = '/img/champion/'
+    data = get_champ_data(champ_id)
+    if data:
+        image_name = data['image']['full']
+        image_path = data_dragon_path + images_path + image_name
+        return image_path
+
+def get_champ_data(champ_id: str):
+    data_path = 'data/en_US/champion.json'
+    data_dragon_path + data_path
+    with open(data_dragon_path + data_path, encoding="utf8") as json_file:
+        data = json.load(json_file)
+        for champion in data['data']:
+            champ_data = data['data'][champion]
+            if champ_data['key'] == champ_id:
+                return champ_data
 
 
 
