@@ -47,6 +47,7 @@ class UserBet(BaseModel):
     resolved = BooleanField(default=False)
     result = BooleanField(null=True)
     message_id = TextField(null=True)
+    time_placed =  DateTimeField(default=datetime.utcnow(), null=False)
 
 class BalanceHistory(BaseModel):
     user = ForeignKeyField(User, backref='balance_history')
@@ -284,7 +285,7 @@ def set_guild_bonus():
 
     try:
         for guild in Guild.select(Guild.id):
-            Guild.update(bonus=(int(get_guild_average(guild)/100))).where(Guild.id==guild).execute()
+            Guild.update(bonus=(int(get_guild_average(guild)/50))).where(Guild.id==guild).execute()
     except Exception as err:
         log.error(err)
         print(err)
@@ -296,43 +297,83 @@ def create_guild(id):
         log.error(err)
         print(err)
 
+
+def get_win_rate(user_id, guild_id, partition=None):
+    try:
+        correct_count = Case(UserBet.result,((1, 1),), 0)
+        if partition:
+            if partition == 'd':
+                query_tuple = (user_id, guild_id, '%Y%m%d')
+            if partition == 'w':
+                query_tuple = (user_id, guild_id, '%Y%W')
+            if partition == 'm':
+                query_tuple = (user_id, guild_id, '%Y%m')
+
+            results = UserBet.raw('''SELECT date(time_placed) AS 'date', 
+              CAST(SUM(CASE result WHEN 1 THEN 1 ELSE 0 END) AS FLOAT)/COUNT(result) AS 'win_rate', 
+              SUM(CASE result WHEN 1 THEN 1 ELSE 0 END) AS 'c_bet', 
+              COUNT(result) AS 'total_bets' 
+              FROM userbet 
+              WHERE user_id = %s AND guild = %s GROUP BY strftime('%s', time_placed)'''%query_tuple)
+        else:
+            results = (UserBet.select(UserBet.result, (Cast(fn.SUM(correct_count), 'float') / fn.COUNT(UserBet.result)).alias("win_rate"))
+                       .where(UserBet.user == user_id, UserBet.guild == guild_id))[0]
+
+
+        return results
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+def get_last_bet_channel(user_id):
+    result = UserBet.select(UserBet.channel).where(UserBet.user == user_id)
+    if result:
+        return result[0].channel
+    else:
+        return None
+
+
+def get_current_streak(user_id, channel):
+    UserBet.select()
+
+
 aram_basic_rewards = {
-    "sightWardsBoughtInGame":  {'mult': .005, 'display': 'Sight wards'},
+    "sightWardsBoughtInGame":  {'mult': .01, 'display': 'Sight wards'},
     "firstBloodKill":  {'mult': .2, 'display': 'First blood'},
-    "killingSprees":  {'mult': .05, 'display': 'Killing sprees'},
+    "killingSprees":  {'mult': .1, 'display': 'Killing sprees'},
     "unrealKills":  {'mult': 1, 'display': 'Unreal kills'},
-    "firstTowerKill":  {'mult': .01, 'display': 'First tower kill'},
-    "doubleKills":  {'mult': .075, 'display': 'Double kills'},
-    "tripleKills":  {'mult': .15, 'display': 'Triple kills'},
-    "quadraKills":  {'mult': .20, 'display': 'Quadra kills'},
-    "pentaKills":  {'mult': .5, 'display': 'Penta kills'},
-    "visionWardsBoughtInGame":  {'mult': .005, 'display': 'Vision wards bought'},
-    "timeCCingOthers":  {'mult': .005, 'display': 'Total CC (s)'},
+    "firstTowerKill":  {'mult': .02, 'display': 'First tower kill'},
+    "doubleKills":  {'mult': .15, 'display': 'Double kills'},
+    "tripleKills":  {'mult': .30, 'display': 'Triple kills'},
+    "quadraKills":  {'mult': .40, 'display': 'Quadra kills'},
+    "pentaKills":  {'mult': .6, 'display': 'Penta kills'},
+    "visionWardsBoughtInGame":  {'mult': .01, 'display': 'Vision wards bought'},
+    "timeCCingOthers":  {'mult': .01, 'display': 'Total CC (s)'},
 }
 
 aram_highest_rewards = {
-    "magicDamageDealtToChampions": {'mult': .05, 'display': 'Best mage'},
-    "totalTimeCrowdControlDealt": {'mult': .1, 'display': 'Most CC'},
-    "longestTimeSpentLiving": {'mult': .075, 'display': 'Longest life'},
-    "physicalDamageDealtToChampions": {'mult': .05, 'display': 'Most phys dmg'},
-    "damageDealtToObjectives": {'mult': .1, 'display': 'Top dmg to objs'},
-    "totalUnitsHealed": {'mult': .2, 'display': 'Best healer'},
-    "totalDamageDealtToChampions": {'mult': .2, 'display': 'King of dmg'},
-    "turretKills": {'mult': .05, 'display': 'Turret slayer'},
-    "goldEarned": {'mult': .1, 'display': 'Top earner'},
-    "killingSprees": {'mult': .1, 'display': 'Serial killer'},
-    "totalHeal": {'mult': .2, 'display': 'Best healer'},
-    "totalMinionsKilled": {'mult': .1, 'display': 'Minion slayer'},
-    "timeCCingOthers": {'mult': .1, 'display': 'King Pin (CC)'},
-    "deaths": {'mult': -.1, 'display': 'Feeder lord'},
+    "magicDamageDealtToChampions": {'mult': .1, 'display': 'Best mage'},
+    "totalTimeCrowdControlDealt": {'mult': .2, 'display': 'Most CC'},
+    "longestTimeSpentLiving": {'mult': .15, 'display': 'Longest life'},
+    "physicalDamageDealtToChampions": {'mult': .1, 'display': 'Most phys dmg'},
+    "damageDealtToObjectives": {'mult': .2, 'display': 'Top dmg to objs'},
+    "totalUnitsHealed": {'mult': .4, 'display': 'Best healer'},
+    "totalDamageDealtToChampions": {'mult': .4, 'display': 'King of dmg'},
+    "turretKills": {'mult': .1, 'display': 'Turret slayer'},
+    "goldEarned": {'mult': .2, 'display': 'Top earner'},
+    "killingSprees": {'mult': .2, 'display': 'Serial killer'},
+    "totalHeal": {'mult': .4, 'display': 'Best healer'},
+    "totalMinionsKilled": {'mult': .2, 'display': 'Minion slayer'},
+    "timeCCingOthers": {'mult': .2, 'display': 'King Pin (CC)'},
+    "deaths": {'mult': -.2, 'display': 'Feeder lord'},
 }
 
 aram_lowest_rewards = {
-    "longestTimeSpentLiving": {'mult': -.1, 'display': 'Shortest life'},
-    "damageDealtToObjectives": {'mult': -.1, 'display': 'Btm dmg to obj'},
-    "deaths": {'mult': .05, 'display': 'Least deaths'},
-    "goldEarned": {'mult': -.05, 'display': 'Dead broke'},
-    "totalMinionsKilled": {'mult': -.01, 'display': 'Minion apologist'},
+    "longestTimeSpentLiving": {'mult': -.2, 'display': 'Shortest life'},
+    "damageDealtToObjectives": {'mult': -.2, 'display': 'Btm dmg to obj'},
+    "deaths": {'mult': .1, 'display': 'Least deaths'},
+    "goldEarned": {'mult': -.1, 'display': 'Dead broke'},
+    "totalMinionsKilled": {'mult': -.02, 'display': 'Minion apologist'},
 }
 
 

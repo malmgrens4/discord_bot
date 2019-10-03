@@ -1,22 +1,19 @@
 # Work with Python 3.6
-import discord
-import configparser
-import logging
-import logging.config
-import db_api
 import asyncio
-import aiohttp
+import configparser
 import json
-import league_api
+import logging.config
 import time
-from PIL import Image, ImageFont, ImageDraw
+from datetime import datetime
+
+import aiohttp
+import discord
 import numpy as np
-
-from random import randint
+from PIL import Image, ImageFont, ImageDraw
 from discord.ext import commands
-from functools import reduce
-import operator
 
+import db_api
+import league_api
 
 config = configparser.ConfigParser()
 config.read('config.ini')
@@ -33,8 +30,9 @@ users = {}
 presence_update_listeners = []
 league_update_listeners = []
 guild_create_listeners = []
-bet_window_ms = 180000
+bet_window_ms = 240000
 bet_resolve_lock = asyncio.Lock()
+timer_create_lock =  asyncio.Lock()
 
 #TODO message still goes through even if bet is not initialized (when db is locked)
 # wait for id from bet before saying so.
@@ -304,14 +302,14 @@ def get_payouts(match_results, sum_id, cur_bet):
     aramHelper = AramStatHelper(match_results)
     flat_bonus = db_api.get_guild_bonus(cur_bet.guild)
 
-    ka_mult = (aramHelper.get_stat('kills', sum_id) * 2)/(aramHelper.get_team_total_by_stat('kills', sum_id))
+    ka_mult = (aramHelper.get_stat('kills', sum_id) * 3)/(aramHelper.get_team_total_by_stat('kills', sum_id))
 
     def ka_payout():
         assist_mult = .5
-        ka = (((aramHelper.get_stat('kills', sum_id) * flat_bonus) + (assist_mult * aramHelper.get_stat('assists', sum_id) * flat_bonus)) * ka_mult)
+        ka = (((aramHelper.get_stat('kills', sum_id) * flat_bonus) + (assist_mult * aramHelper.get_stat('assists', sum_id) * flat_bonus)) * ka_mult) * .25
         return ka
 
-    death_mult =  ((aramHelper.get_stat('deaths', sum_id) * 5) / aramHelper.get_team_total_by_stat('kills', sum_id, False))
+    death_mult =  ((aramHelper.get_stat('deaths', sum_id) * 5) / aramHelper.get_team_total_by_stat('kills', sum_id, False)) * .25
 
     def death_payout():
         deaths = -((aramHelper.get_stat('deaths', sum_id) * flat_bonus) * death_mult)
@@ -419,12 +417,12 @@ async def league_api_updates():
 
 async def set_game_for_pending_bets(user_id, active_match):
     try:
-        if int(round(time.time() * 1000)) - (active_match['gameStartTime']) < bet_window_ms:
+        # get all message ids with that bet target and edit the message to include a checkmark
+        bets_to_be_resolved = db_api.get_new_bets_by_target(user_id)
 
-            # get all message ids with that bet target and edit the message to include a checkmark
-            bets_to_be_resolved = db_api.get_new_bets_by_target(user_id)
-
-            for pending_bet in bets_to_be_resolved:
+        for pending_bet in bets_to_be_resolved:
+            bet_place_time = int(pending_bet.time_placed.timestamp()/1000)
+            if bet_place_time - (active_match['gameStartTime']) < bet_window_ms:
                 for channel in bot.get_all_channels():
                     try:
                         conf_msg = await channel.fetch_message(pending_bet.message_id)
@@ -433,8 +431,8 @@ async def set_game_for_pending_bets(user_id, active_match):
                         print(err)
                         continue
 
-            db_api.set_bet_game_id({'game_id': active_match["gameId"],
-                                    'bet_target': user_id})
+        db_api.set_bet_game_id({'game_id': active_match["gameId"],
+                                'bet_target': user_id})
 
     except Exception as err:
         log.error('issue setting game for pending bets.')
@@ -492,48 +490,50 @@ async def display_bet_windows():
 
     while True:
         try:
-            # get each game being bet on
-            # see if any are below the time threshold
-            # if there are see if a message for it already exists
-            # otherwise: create a new message to display it.
             await asyncio.sleep(1)
-            pending_bets = db_api.get_pending_bets()
-
-
-            for p_bet in pending_bets:
-                if not timer_displays:
-                    sum_id = db_api.get_user_summoner_id({'id': p_bet.bet_target.id})
-                    live_match_data = league_api.get_player_current_match(sum_id)
-                    if live_match_data:
-                        game_start_time = live_match_data['gameStartTime']
-                        teams = get_match_players(live_match_data)
-                        await send_game_images(p_bet.channel, teams)
-                        message_id = await bot.get_channel(p_bet.channel).send('Time until betting is closed for %s' % ([display_username(p_bet.bet_target.id)]))
-                        timer_displays.append(TimerDisplay(p_bet.game_id, p_bet.channel, message_id, [p_bet.bet_target.id], game_start_time))
-                for timer in timer_displays:
-                    if timer.channel != p_bet.channel and timer.game != p_bet.game_id:
-                        sum_id = db_api.get_user_summoner_id({'id': p_bet.bet_target.id})
-                        live_match_data = league_api.get_player_current_match(sum_id)
-                        if live_match_data:
-                            game_start_time = live_match_data['gameStartTime']
-                            teams = get_match_players(live_match_data)
-                            await send_game_images(p_bet.channel, teams)
-                            message_id = await bot.get_channel(p_bet.channel).send('Time until betting is closed for %s' % ([display_username(p_bet.bet_target.id)]))
-                            timer_displays.append(TimerDisplay(p_bet.game_id, p_bet.channel, message_id, [p_bet.bet_target.id], game_start_time))
-
-                    else:
-                        if p_bet.bet_target.id not in timer.users:
-                            timer.users.append(p_bet.bet_target.id)
-
-
-
-
             for timer in timer_displays:
                 await timer.update()
 
         except Exception as err:
             log.error(err)
             log.error('Timer issue')
+
+
+async def display_game_timers(user_id, match_data):
+    game_start_time = match_data['gameStartTime']
+    if game_start_time <= 0:
+        return
+
+    async def create_timer():
+        # get channel id from last bet of this user.
+        # if not just use the first one we can (first text channel available)
+        # init message
+        async with timer_create_lock:
+            last_channel = db_api.get_last_bet_channel(user_id)
+            if not last_channel:
+                for channel in bot.get_all_channels():
+                    if channel.type == 'text':
+                        last_channel = channel.id
+                        break
+
+            teams = get_match_players(match_data)
+            await send_game_images(last_channel, teams)
+            message_id = await bot.get_channel(last_channel).send('Time until betting is closed for %s' % ([display_username(user_id)]))
+
+            new_timer = TimerDisplay(match_data['gameId'], last_channel, message_id, [user_id], game_start_time)
+            timer_displays.append(new_timer)
+
+    if not timer_displays:
+        await create_timer()
+
+    else:
+        async with timer_create_lock:
+            for timer in timer_displays:
+                if timer.game == match_data['gameId'] and user_id not in timer.users:
+
+                    timer.users.append(user_id)
+
+
 
 
 def get_match_players(cur_match_data):
@@ -603,15 +603,7 @@ async def send_game_images(channel, teams):
     except Exception as err:
         print(err)
         log.error(err)
-        # for participant in team_data:
-        #     path = league_api.get_champ_image_path(participant['champ'])
-        #     if path:
-        #         file = discord.File(path, filename=participant['champ'] + '.png')
-        #         if not file:
-        #             file = discord.File('./img/missing_character.jpeg', filename='whoops.jpeg')
-        #         await bot.get_channel(channel).send(">>> %s as %s"%(participant['player'], participant['champ']), files=[file])
-        # if i==0:
-        #     await bot.get_channel(channel).send('\n VS \n')
+
 
 
 @bot.command()
@@ -701,7 +693,7 @@ async def set_flat_bonus(user_id=None):
 
 guild_create_listeners = [init_user_info_cache]
 #presence_update_listeners = [set_user_state, process_discord_data_for_league_bet, resolve_pending_bets]
-league_match_listeners = [set_game_for_pending_bets]
+league_match_listeners = [set_game_for_pending_bets, display_game_timers]
 league_not_in_match_listeners = [resolve_pending_bets, set_flat_bonus]
 
 """COMMANDS"""
@@ -727,6 +719,19 @@ async def cancel_bet(ctx):
     else:
         await ctx.send('>>> No bets available to be canceled.')
     await display_all_bets(ctx)
+
+
+@bot.command()
+async def wr(ctx, partition: str = None):
+    """See your win rate and or by intervals: day(d), week(w), month(m)."""
+    results = db_api.get_win_rate(ctx.author.id, ctx.guild.id, partition)
+    if partition:
+        headers = ['Date', 'Bet Win Rate', 'Correct Bets', 'Total Bets']
+        rows = [[result.date, round(result.win_rate, 3), result.c_bet, result.total_bets] for result in results]
+
+        await ctx.send('```' + create_display_table(headers, rows) + '```')
+    else:
+        await ctx.send('''>>> Your overall win rate: %s'''%(round(results.win_rate, 3),))
 
 
 async def instantiate_bet(ctx, target_user: str, win: str, amount: str):

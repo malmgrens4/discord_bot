@@ -1,6 +1,6 @@
 import json
 import asyncio
-
+from league_api import *
 
 def get_match_data(match_id):
     with open('match_response.txt') as json_file:
@@ -33,5 +33,9 @@ def parse_match_data(summoner_id):
 
     return results
 
-print(parse_match_data('zZpxD_S63XAHtiekXv5Ro6dvgnaUiUXLoi7wC5bNiUwDhQ4'))
 
+
+
+print(get_champ_data('84'))
+
+print(get_champ_image('84'))
