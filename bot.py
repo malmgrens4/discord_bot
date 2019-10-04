@@ -5,7 +5,7 @@ import json
 import logging.config
 import time
 from datetime import datetime
-
+from art import *
 import aiohttp
 import discord
 import numpy as np
@@ -93,9 +93,10 @@ async def resolve_pending_bets(data=None):
 
 
 async def clear_timers():
-    for timer in timer_displays:
-        if not await timer.update():
-            timer_displays.remove(timer)
+    async with timer_create_lock:
+        for timer in timer_displays:
+            if not await timer.update():
+                timer_displays.remove(timer)
 
 
 @bot.command()
@@ -144,22 +145,12 @@ def create_display_table(headers, rows, col_length=15):
 def get_payout_display(bet_right, cur_bet, bet_results):
     headers = ['Title', 'Stat', 'Reward']
     rows = [value.values() for value in bet_results]
-    msg = create_display_table(headers, rows,24)
+    msg = create_display_table(headers, rows, 24)
     if bet_right:
-        win_text = """
-         _       _______   ___   ____________     
-        | |     / /  _/ | / / | / / ____/ __ \    
-        | | /| / // //  |/ /  |/ / __/ / /_/ /    
-        | |/ |/ // // /|  / /|  / /___/ _, _/     
-        |__/|__/___/_/ |_/_/ |_/_____/_/ |_|""" + '\n\n'
+        win_text = text2art("Winner", font="random") + '\n\n'
         msg = win_text + msg
     else:
-        lose_text = """
-            __    ____  _____ __________ 
-           / /   / __ \/ ___// ____/ __ |
-          / /   / / / /\__ \/ __/ / /_/ /
-         / /___/ /_/ /___/ / /___/ _, _/ 
-        /_____/\____//____/_____/_/ |_|""" + '\n\n'
+        lose_text = text2art("Loser", font="random") + '\n\n'
         msg = lose_text + msg
 
     header = ">>> <@!%s> bet on <@!%s> for %s"%(cur_bet.user_id, cur_bet.bet_target, cur_bet.amount)
@@ -167,6 +158,23 @@ def get_payout_display(bet_right, cur_bet, bet_results):
 
 def format_number(value):
     return str('{:,}'.format(value))
+
+
+@bot.command()
+async def ascii(ctx, word: str):
+    """Display ASCII art of the entered word."""
+    display_text = '```' + text2art(text=word, font="random", chr_ignore=True) + '```'
+    await ctx.send(display_text)
+
+
+@bot.command()
+async def ascii_art(ctx, word: str = None):
+    """Display ASCII art based off of the entered word."""
+    if not word:
+        word = "rand"
+    display_text = '```' + art(word) + '```'
+    await ctx.send(display_text)
+
 
 @bot.command()
 async def balance(ctx, target_user :str = None):
@@ -296,6 +304,10 @@ class AramStatHelper:
 # Create permissions for myself and create a command to roll back a bet - delete it
 # and return the user to their balance prior to the bet
 
+def get_bet_payout(match_results, sum_id, cur_bet):
+    aramHelper = AramStatHelper(match_results)
+    did_win = aramHelper.get_stat('win', sum_id)
+    return 2 * cur_bet.amount if did_win == cur_bet.will_win else 0
 
 def get_payouts(match_results, sum_id, cur_bet):
     """Returns dict containing the title and amount of a payout reward for a given game based off of the summoner"""
@@ -401,18 +413,21 @@ async def set_user_state(data):
 async def league_api_updates():
     while True:
         await asyncio.sleep(30)
-        if users:
-            for user_id in [str(user.id) for user in db_api.get_users()]:
-                try:
-                    summoner_id = db_api.get_user_summoner_id({'id': user_id})
-                    if summoner_id:
-                        active_match = league_api.get_player_current_match(summoner_id)
-                        [await listener(user_id, active_match) for listener in league_match_listeners]
-                except league_api.LeagueRequestError as err:
-                    [await listener(user_id) for listener in league_not_in_match_listeners]
-                except Exception as err:
-                    log.error('League API update error.')
-                    log.error(err)
+        try:
+            if users:
+                for user_id in [str(user.id) for user in db_api.get_users()]:
+                    try:
+                        summoner_id = db_api.get_user_summoner_id({'id': user_id})
+                        if summoner_id:
+                            active_match = league_api.get_player_current_match(summoner_id)
+                            [await listener(user_id, active_match) for listener in league_match_listeners]
+                    except league_api.LeagueRequestError as err:
+                        [await listener(user_id) for listener in league_not_in_match_listeners]
+                    except Exception as err:
+                        log.error('League API update error.')
+                        log.error(err)
+        except Exception as err:
+            print(err)
 
 
 async def set_game_for_pending_bets(user_id, active_match):
@@ -509,9 +524,11 @@ async def display_game_timers(user_id, match_data):
         # if not just use the first one we can (first text channel available)
         # init message
         async with timer_create_lock:
+
             last_channel = db_api.get_last_bet_channel(user_id)
             if not last_channel:
                 for channel in bot.get_all_channels():
+                    #check guild as well
                     if channel.type == 'text':
                         last_channel = channel.id
                         break
@@ -522,17 +539,17 @@ async def display_game_timers(user_id, match_data):
 
             new_timer = TimerDisplay(match_data['gameId'], last_channel, message_id, [user_id], game_start_time)
             timer_displays.append(new_timer)
+            return
 
-    if not timer_displays:
-        await create_timer()
 
-    else:
+        make_timer = True
         async with timer_create_lock:
             for timer in timer_displays:
                 if timer.game == match_data['gameId'] and user_id not in timer.users:
-
+                    make_timer = False
                     timer.users.append(user_id)
-
+        if make_timer:
+            await create_timer()
 
 
 

@@ -326,11 +326,9 @@ def get_win_rate(user_id, guild_id, partition=None):
         print(err)
 
 def get_last_bet_channel(user_id):
-    result = UserBet.select(UserBet.channel).where(UserBet.user == user_id)
-    if result:
-        return result[0].channel
-    else:
-        return None
+    #result = UserBet.select(UserBet.channel).where(UserBet.user == user_id)
+    #TODO make this display in a configured channel per guild
+    return 617178864376086548
 
 
 def get_current_streak(user_id, channel):
