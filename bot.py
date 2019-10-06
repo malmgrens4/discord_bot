@@ -468,33 +468,23 @@ class TimerDisplay:
         self.game_start_time = game_start_time
         self.channel = channel
         self.users = users
+        self.time_left = bet_window_ms - ((round(time.time() * 1000)) - self.game_start_time)
 
     #TODO add a time bet was placed attribute to make sure people don't miss betting because the API didn't resolve it in time.
     async def update(self):
         self.time_left = bet_window_ms - ((round(time.time() * 1000)) - self.game_start_time)
         if self.time_left <= 0:
-            for channel in bot.get_all_channels():
-                try:
-                    if channel.id == self.channel:
-                        time_left_msg = await channel.fetch_message(self.message.id)
-                        await time_left_msg.edit(content='Betting is closed for %s.'%([display_username(user) for user in self.users],))
-                except Exception as err:
-                    print(err)
-                    continue
+            time_left_msg = await self.channel.fetch_message(self.message.id)
+            await time_left_msg.edit(content='Betting is closed for %s.'%([display_username(user) for user in self.users],))
             return False
 
         mins, secs = divmod(int(self.time_left/1000), 60)
         timeformat = '{:02d}:{:02d}'.format(mins, secs)
 
-        for channel in bot.get_all_channels():
-            try:
-                if channel.id == self.channel:
-                    time_left_msg = await channel.fetch_message(self.message.id)
-                    new_msg = '%s left to bet for %s'%(timeformat, [display_username(user) for user in self.users])
-                    await time_left_msg.edit(content=new_msg)
-            except Exception as err:
-                print(err)
-                continue
+
+        time_left_msg = await self.channel.fetch_message(self.message.id)
+        new_msg = '%s left to bet for %s'%(timeformat, [display_username(user) for user in self.users])
+        await time_left_msg.edit(content=new_msg)
         return True
 
 
