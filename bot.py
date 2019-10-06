@@ -412,7 +412,7 @@ async def set_user_state(data):
 
 async def league_api_updates():
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(5)
         try:
             if users:
                 for user_id in [str(user.id) for user in db_api.get_users()]:
@@ -433,6 +433,10 @@ async def league_api_updates():
 async def set_game_for_pending_bets(user_id, active_match):
     try:
         # get all message ids with that bet target and edit the message to include a checkmark
+        # TODO this might be better to do one at a time. This way Beeven can ensure integrity of exactly what bets were locked in.
+        if active_match['gameStartTime'] == 0:
+            return
+
         bets_to_be_resolved = db_api.get_new_bets_by_target(user_id)
 
         for pending_bet in bets_to_be_resolved:
@@ -440,10 +444,12 @@ async def set_game_for_pending_bets(user_id, active_match):
             if bet_place_time - (active_match['gameStartTime']) < bet_window_ms:
                 for channel in bot.get_all_channels():
                     try:
-                        conf_msg = await channel.fetch_message(pending_bet.message_id)
-                        await conf_msg.edit(content=(':white_check_mark: ' + conf_msg.content))
+                        if channel.type[0] == 'text':
+                            conf_msg = await channel.fetch_message(pending_bet.message_id)
+                            await conf_msg.edit(content=(':white_check_mark: ' + conf_msg.content))
                     except Exception as err:
-                        print(err)
+                        log.error('issue setting game id for bet %s'%(pending_bet.id))
+                        log.error(err)
                         continue
 
         db_api.set_bet_game_id({'game_id': active_match["gameId"],
@@ -514,42 +520,42 @@ async def display_bet_windows():
             log.error('Timer issue')
 
 
+
+async def create_timer(user_id, channel, match_data):
+    # get channel id from last bet of this user.
+    # if not just use the first one we can (first text channel available)
+    # init message
+    game_start_time = match_data['gameStartTime']
+    teams = get_match_players(match_data)
+    await send_game_images(channel, teams)
+    message_id = await channel.send('Time until betting is closed for %s' % ([display_username(user_id)]))
+    new_timer = TimerDisplay(match_data['gameId'], channel, message_id, [user_id], game_start_time)
+    timer_displays.append(new_timer)
+    return new_timer
+
+
 async def display_game_timers(user_id, match_data):
     game_start_time = match_data['gameStartTime']
     if game_start_time <= 0:
         return
 
-    async def create_timer():
-        # get channel id from last bet of this user.
-        # if not just use the first one we can (first text channel available)
-        # init message
-        async with timer_create_lock:
-
-            last_channel = db_api.get_last_bet_channel(user_id)
-            if not last_channel:
-                for channel in bot.get_all_channels():
-                    #check guild as well
-                    if channel.type == 'text':
-                        last_channel = channel.id
-                        break
-
-            teams = get_match_players(match_data)
-            await send_game_images(last_channel, teams)
-            message_id = await bot.get_channel(last_channel).send('Time until betting is closed for %s' % ([display_username(user_id)]))
-
-            new_timer = TimerDisplay(match_data['gameId'], last_channel, message_id, [user_id], game_start_time)
-            timer_displays.append(new_timer)
-            return
-
-
-        make_timer = True
-        async with timer_create_lock:
+    async with timer_create_lock:
+        for guild in bot.guilds:
+            last_channel_id = db_api.get_last_bet_channel(guild.id)
+            if not last_channel_id:
+                last_channel_id = [channel for channel in guild.channels if channel.type[0] == 'text'][0].id
+            channel = bot.get_channel(last_channel_id)
+            make_timer = True
             for timer in timer_displays:
-                if timer.game == match_data['gameId'] and user_id not in timer.users:
-                    make_timer = False
-                    timer.users.append(user_id)
-        if make_timer:
-            await create_timer()
+                if timer.game == match_data['gameId'] and timer.channel == channel:
+                    if user_id in timer.users:
+                        make_timer = False
+                    else:
+                        make_timer = False
+                        timer.users.append(user_id)
+            if make_timer:
+                await create_timer(user_id, channel, match_data)
+
 
 
 
@@ -616,7 +622,7 @@ async def send_game_images(channel, teams):
         final_cmb.save('final.png')
 
         file = discord.File('./final.png', filename='match.png')
-        await bot.get_channel(channel).send("", files=[file])
+        await channel.send("", files=[file])
     except Exception as err:
         print(err)
         log.error(err)

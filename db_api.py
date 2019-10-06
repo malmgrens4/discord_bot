@@ -55,21 +55,28 @@ class BalanceHistory(BaseModel):
     gold = IntegerField(null=False)
     date = DateTimeField(default=datetime.utcnow(), null=False)
 
-
 class Guild(BaseModel):
     id = PrimaryKeyField()
     bonus = IntegerField(null=True)
 
+class MatchHistory(BaseModel):
+    id = PrimaryKeyField()
+    game = IntegerField(null=False)
+    summoner = TextField(null=False)
+    resolved = BooleanField(null=False, default=0)
+
+class MatchData(BaseModel):
+    game = IntegerField()
+    match_data = TextField()
 
 db.connect()
-db.create_tables([Guild, User, UserGuildStats, UserBet, BalanceHistory])
+db.create_tables([Guild, User, UserGuildStats, UserBet, BalanceHistory, MatchHistory])
 
 def init_user_stats(user, guild):
     try:
         UserGuildStats.create(user=user['id'], guild=guild['id'])
     except Exception as e:
         log.error(e)
-
 
 def add_user_gold(user_id, guild_id, amount):
     try:
@@ -325,11 +332,15 @@ def get_win_rate(user_id, guild_id, partition=None):
         log.error(err)
         print(err)
 
-def get_last_bet_channel(user_id):
-    #result = UserBet.select(UserBet.channel).where(UserBet.user == user_id)
-    #TODO make this display in a configured channel per guild
-    return 617178864376086548
+def get_last_bet_channel(guild_id):
+    try:
+        result = UserBet.select(UserBet.channel).where(UserBet.guild == guild_id).order_by(UserBet.time_placed).limit(1)[0].channel
+        #TODO make this display in a configured channel per guild
+        return result
 
+    except Exception as err:
+        log.error(err)
+        print(err)
 
 def get_current_streak(user_id, channel):
     UserBet.select()
