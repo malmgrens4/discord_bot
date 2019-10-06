@@ -412,7 +412,7 @@ async def set_user_state(data):
 
 async def league_api_updates():
     while True:
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
         try:
             if users:
                 for user_id in [str(user.id) for user in db_api.get_users()]:
@@ -522,16 +522,16 @@ async def display_bet_windows():
 
 
 async def create_timer(user_id, channel, match_data):
-    # get channel id from last bet of this user.
-    # if not just use the first one we can (first text channel available)
-    # init message
     game_start_time = match_data['gameStartTime']
-    teams = get_match_players(match_data)
-    await send_game_images(channel, teams)
-    message_id = await channel.send('Time until betting is closed for %s' % ([display_username(user_id)]))
-    new_timer = TimerDisplay(match_data['gameId'], channel, message_id, [user_id], game_start_time)
-    timer_displays.append(new_timer)
-    return new_timer
+    if bet_window_ms > ((round(time.time() * 1000)) - game_start_time):
+        teams = get_match_players(match_data)
+        await send_game_images(channel, teams)
+        message_id = await channel.send('Time until betting is closed for %s' % ([display_username(user_id)]))
+        new_timer = TimerDisplay(match_data['gameId'], channel, message_id, [user_id], game_start_time)
+        timer_displays.append(new_timer)
+        return new_timer
+    else:
+        log.error('Create timer called after viable bet window.')
 
 
 async def display_game_timers(user_id, match_data):
