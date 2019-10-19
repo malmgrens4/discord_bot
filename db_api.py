@@ -47,13 +47,13 @@ class UserBet(BaseModel):
     resolved = BooleanField(default=False)
     result = BooleanField(null=True)
     message_id = TextField(null=True)
-    time_placed =  DateTimeField(default=datetime.utcnow(), null=False)
+    time_placed =  DateTimeField(default=datetime.utcnow, null=False)
 
 class BalanceHistory(BaseModel):
     user = ForeignKeyField(User, backref='balance_history')
     guild = IntegerField()
     gold = IntegerField(null=False)
-    date = DateTimeField(default=datetime.utcnow(), null=False)
+    date = DateTimeField(default=datetime.utcnow, null=False)
 
 class Guild(BaseModel):
     id = PrimaryKeyField()
@@ -62,15 +62,16 @@ class Guild(BaseModel):
 class MatchHistory(BaseModel):
     id = PrimaryKeyField()
     game = IntegerField(null=False)
-    summoner = TextField(null=False)
+    user = ForeignKeyField(User, backref='match_history')
     resolved = BooleanField(null=False, default=0)
 
 class MatchData(BaseModel):
-    game = IntegerField()
+    game = PrimaryKeyField()
     match_data = TextField()
 
+
 db.connect()
-db.create_tables([Guild, User, UserGuildStats, UserBet, BalanceHistory, MatchHistory])
+db.create_tables([Guild, User, UserGuildStats, UserBet, BalanceHistory, MatchHistory, MatchData])
 
 def init_user_stats(user, guild):
     try:
@@ -274,7 +275,7 @@ def get_guild_total(guild_id):
 def get_guild_average(guild_id):
     try:
         total = get_guild_total(guild_id)
-        result = (UserGuildStats.select(fn.COUNT(UserGuildStats.user_id).alias('count'))
+        result = (UserGuildStats.select(fn.COUNT(UserGuildStats.user).alias('count'))
                   .where(UserGuildStats.guild == guild_id, UserGuildStats.gold.is_null(False)))[0]
         return total / result.count
     except Exception as err:
@@ -321,7 +322,7 @@ def get_win_rate(user_id, guild_id, partition=None):
               SUM(CASE result WHEN 1 THEN 1 ELSE 0 END) AS 'c_bet', 
               COUNT(result) AS 'total_bets' 
               FROM userbet 
-              WHERE user_id = %s AND guild = %s GROUP BY strftime('%s', time_placed)'''%query_tuple)
+              WHERE user_id = %s AND guild = %s GROUP BY strftime('%s', time_placed) ORDER BY time_placed DESC'''%query_tuple)
         else:
             results = (UserBet.select(UserBet.result, (Cast(fn.SUM(correct_count), 'float') / fn.COUNT(UserBet.result)).alias("win_rate"))
                        .where(UserBet.user == user_id, UserBet.guild == guild_id))[0]
@@ -344,6 +345,30 @@ def get_last_bet_channel(guild_id):
 
 def get_current_streak(user_id, channel):
     UserBet.select()
+
+
+def create_user_game(user_id, game_id):
+    try:
+        MatchHistory.get_or_create(user=user_id, game=game_id)
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+def get_unresolved_games(user_id):
+    try:
+        return MatchHistory.select(MatchHistory.id, MatchHistory.game)\
+            .where((MatchHistory.user == user_id), (MatchHistory.resolved == False))
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+def resolve_game(match_id):
+    try:
+        MatchHistory.update({MatchHistory.resolved: True}).where(MatchHistory.id==match_id).execute()
+    except Exception as err:
+        log.error(err)
+        print(err)
+
 
 
 aram_basic_rewards = {

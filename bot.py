@@ -9,6 +9,9 @@ from art import *
 import aiohttp
 import discord
 import numpy as np
+from google_images_download import google_images_download
+import shutil
+from random import random
 from PIL import Image, ImageFont, ImageDraw
 from discord.ext import commands
 
@@ -52,29 +55,24 @@ async def resolve_pending_bets(data=None):
                         log.error('Summoner id not found for bet target %s when one was expected' % (bet.bet_target,))
                         pass
 
-                    payouts = get_payouts(match_results, bet_target_summoner_id, cur_bet)
+                    #TODO make this vary based on the game mode
+                    stat_helper = AramStatHelper(match_results)
+
+                    payouts = get_bet_payout(stat_helper, bet_target_summoner_id, cur_bet)
                     # TODO gameMode
                     # TODO rollback transaction if both don't go through
                     if payouts is not None:
-                        aramHelper = AramStatHelper(match_results)
-                        did_win = aramHelper.get_stat('win', bet_target_summoner_id)
-
-                        for payout in payouts:
-                            if payout['display'] == 'Total':
-                                total = payout['reward']
-                        if not total:
-                            log.error('total not found')
-                            return
+                        did_win = stat_helper.get_stat('win', bet_target_summoner_id)
 
                         prediction_right = did_win==bool(cur_bet.will_win)
 
-                        user_id = cur_bet.user
+                        user_id = cur_bet.user.id
                         guild_id = cur_bet.guild
 
-                        db_api.add_user_gold(user_id, guild_id, total)
+                        db_api.add_user_gold(user_id, guild_id, payouts['reward'])
                         await clear_timers()
                         db_api.resolve_bet_by_id(cur_bet.id, prediction_right)
-                        message = get_payout_display(prediction_right, cur_bet, payouts)
+                        message = get_payout_display(prediction_right, cur_bet, [payouts])
                         await bot.get_channel(cur_bet.channel).send(message)
 
                     else:
@@ -97,6 +95,96 @@ async def clear_timers():
         for timer in timer_displays:
             if not await timer.update():
                 timer_displays.remove(timer)
+
+
+@bot.command()
+async def img(ctx, keyword: str, offset: int = None):
+    """Google image results based off of entered word. CS for multiple."""
+    response = google_images_download.googleimagesdownload()  # class instantiation
+    if not offset :
+        offset = int(100 * random()) + 1
+    offset = abs(offset)
+    offset = min(offset, 100)
+
+    arguments = {"keywords": keyword, "limit": offset, "output_directory": "./google_downloads",
+                 "image_directory": "images", "offset": offset, "silent_mode": True}  # creating list of arguments
+    try:
+        paths = response.download(arguments)  # passing the arguments to the function
+        await send_google_imgs(ctx, paths)
+
+    except Exception as err:
+        log.error(err)
+    finally:
+        shutil.rmtree('./google_downloads/images')
+
+
+@bot.command()
+async def meme(ctx, keyword: str, top_line: str, btm_line: str, offset:int = None):
+    """Generate a meme with a google image results by entering a keyword then the top and bottom lines."""
+
+    font = ImageFont.truetype("./fonts/Roboto-Black.ttf", 12)
+    response = google_images_download.googleimagesdownload()  # class instantiation
+    if not offset:
+        offset = int(100 * random()) + 1
+    offset = abs(offset)
+    offset = min(offset, 100)
+
+    arguments = {"keywords": keyword, "limit": offset, "output_directory": "./google_downloads",
+                 "image_directory": "images", "offset": offset, "silent_mode": True}  # creating list of arguments
+    try:
+        paths = response.download(arguments)  # passing the arguments to the function
+        for path in paths:
+            try:
+                for key, value in path.items():
+                    for file_path in value:
+                        img_fraction = .65
+                        font_size = 12
+                        cur_img = Image.open(file_path)
+                        width, height = cur_img.size
+                        draw = ImageDraw.Draw(cur_img)
+
+                        while font.getsize(top_line)[0] <= img_fraction * width:
+                            font_size += 1
+                            font = ImageFont.truetype("./fonts/Roboto-Black.ttf", font_size)
+
+                        font_size -= 1
+                        font = ImageFont.truetype("./fonts/Roboto-Black.ttf", font_size)
+                        text_width, text_height = font.getsize(top_line)
+                        text_x = ((width - text_width) / 2)
+                        draw.text((text_x + 1, 1), top_line, (0, 0, 0), font=font)
+                        draw.text((text_x - 1, 1), top_line, (0, 0, 0), font=font)
+                        draw.text((text_x, 1), top_line, (255, 255, 255), font=font)
+
+                        font_size = 1
+                        font = ImageFont.truetype("./fonts/Roboto-Black.ttf", font_size)
+                        while font.getsize(btm_line)[0] <= img_fraction * width:
+                            font_size += 1
+                            font = ImageFont.truetype("./fonts/Roboto-Black.ttf", font_size)
+
+                        font_size -= 1
+                        font = ImageFont.truetype("./fonts/Roboto-Black.ttf", font_size)
+                        text_width, text_height = font.getsize(btm_line)
+                        text_x = ((width - text_width) / 2)
+
+                        draw.text((text_x + 1, height - text_height - 1), btm_line, (0, 0, 0), font=font)
+                        draw.text((text_x - 1, height - text_height - 1), btm_line, (0, 0, 0), font=font)
+                        draw.text((text_x, height - text_height - 1), btm_line, (255, 255, 255), font=font)
+                        cur_img.save(file_path)
+            except Exception as err:
+                log.error(err)
+        await send_google_imgs(ctx, paths)
+    except Exception as err:
+        log.error(err)
+    finally:
+        shutil.rmtree('./google_downloads/images')
+
+
+async def send_google_imgs(ctx, paths):
+    for path in paths:
+        for key, value in path.items():
+            for file_path in value:
+                file = discord.File(file_path, filename=str(key) + '.png')
+                await ctx.send("", files=[file])
 
 
 @bot.command()
@@ -145,7 +233,7 @@ def create_display_table(headers, rows, col_length=15):
 def get_payout_display(bet_right, cur_bet, bet_results):
     headers = ['Title', 'Stat', 'Reward']
     rows = [value.values() for value in bet_results]
-    msg = create_display_table(headers, rows, 24)
+    msg = create_display_table(headers, rows, 20)
     if bet_right:
         win_text = text2art("Winner", font="random") + '\n\n'
         msg = win_text + msg
@@ -304,33 +392,36 @@ class AramStatHelper:
 # Create permissions for myself and create a command to roll back a bet - delete it
 # and return the user to their balance prior to the bet
 
-def get_bet_payout(match_results, sum_id, cur_bet):
-    aramHelper = AramStatHelper(match_results)
-    did_win = aramHelper.get_stat('win', sum_id)
-    return 2 * cur_bet.amount if did_win == cur_bet.will_win else 0
 
-def get_payouts(match_results, sum_id, cur_bet):
+
+def get_bet_payout(stat_helper, sum_id, cur_bet):
+    did_win = stat_helper.get_stat('win', sum_id)
+    reward = 2 * cur_bet.amount if did_win == cur_bet.will_win else 0
+    return {'display': 'Win', 'mult': '', 'reward': reward}
+
+
+def get_payouts(match_results, stat_helper, sum_id, guild):
     """Returns dict containing the title and amount of a payout reward for a given game based off of the summoner"""
-    aramHelper = AramStatHelper(match_results)
-    flat_bonus = db_api.get_guild_bonus(cur_bet.guild)
+    stat_helper = AramStatHelper(match_results)
+    flat_bonus = db_api.get_guild_bonus(guild)
 
-    ka_mult = (aramHelper.get_stat('kills', sum_id) * 3)/(aramHelper.get_team_total_by_stat('kills', sum_id))
+    ka_mult = (stat_helper.get_stat('kills', sum_id) * 3)/(stat_helper.get_team_total_by_stat('kills', sum_id))
 
     def ka_payout():
         assist_mult = .5
-        ka = (((aramHelper.get_stat('kills', sum_id) * flat_bonus) + (assist_mult * aramHelper.get_stat('assists', sum_id) * flat_bonus)) * ka_mult) * .25
+        ka = (((stat_helper.get_stat('kills', sum_id) * flat_bonus) + (assist_mult * stat_helper.get_stat('assists', sum_id) * flat_bonus)) * ka_mult) * .25
         return ka
 
-    death_mult =  ((aramHelper.get_stat('deaths', sum_id) * 5) / aramHelper.get_team_total_by_stat('kills', sum_id, False)) * .25
+    death_mult =  ((stat_helper.get_stat('deaths', sum_id) * 5) / stat_helper.get_team_total_by_stat('kills', sum_id, False)) * .25
 
     def death_payout():
-        deaths = -((aramHelper.get_stat('deaths', sum_id) * flat_bonus) * death_mult)
+        deaths = -((stat_helper.get_stat('deaths', sum_id) * flat_bonus) * death_mult)
 
         return deaths
 
-    def win_payout():
-        did_win = aramHelper.get_stat('win', sum_id)
-        return 2 * cur_bet.amount if did_win == cur_bet.will_win else 0
+    # def win_payout():
+    #     did_win = stat_helper.get_stat('win', sum_id)
+    #     return 2 * cur_bet.amount if did_win == cur_bet.will_win else 0
 
 
     def format_mult(mult, value):
@@ -338,34 +429,34 @@ def get_payouts(match_results, sum_id, cur_bet):
             return str(mult)
         return str(mult) + ' x ' + ('%.2f'%value if value % 1 else str(value))
 
-    ka = {'display': 'Kills/Assists', 'mult': str(aramHelper.get_stat('kills', sum_id)) + '/'
-                                              + str(aramHelper.get_stat('assists', sum_id))
+    ka = {'display': 'Kills/Assists', 'mult': str(stat_helper.get_stat('kills', sum_id)) + '/'
+                                              + str(stat_helper.get_stat('assists', sum_id))
                                               + ' x ' + format_mult(flat_bonus, ka_mult)
                                     , 'reward': ka_payout()}
 
-    deaths = {'display': 'Deaths', 'mult': format_mult(-1, aramHelper.get_stat('deaths', sum_id))
+    deaths = {'display': 'Deaths', 'mult': format_mult(-1, stat_helper.get_stat('deaths', sum_id))
                        + ' x ' + format_mult(flat_bonus, death_mult), 'reward': death_payout()}
-    win = {'display': 'Win', 'mult': '', 'reward': win_payout()}
+    # win = {'display': 'Win', 'mult': '', 'reward': win_payout()}
 
-    payouts = [win, ka, deaths]
+    payouts = [ka, deaths]
 
     for key, value in db_api.aram_basic_rewards.items():
         #TODO not sure when, but maybe 0 is a good thing (damageTaken???)
-        stat = aramHelper.get_stat(key, sum_id)
+        stat = stat_helper.get_stat(key, sum_id)
         if  stat != 0:
             payouts.append({'display': value['display'],
                             'mult': format_mult(value['mult'], stat) + ' x ' + str(flat_bonus),
                             'reward': (value['mult'] * stat * flat_bonus)})
 
     for key, value in db_api.aram_highest_rewards.items():
-        if aramHelper.is_highest_in_game(key, sum_id):
+        if stat_helper.is_highest_in_game(key, sum_id):
             payouts.append({'display': value['display'],
                             'mult': str(value['mult']) + ' x ' + str(flat_bonus),
                             'reward': (value['mult'] * flat_bonus)})
 
 
     for key, value in db_api.aram_lowest_rewards.items():
-        if aramHelper.is_lowest_in_game(key, sum_id):
+        if stat_helper.is_lowest_in_game(key, sum_id):
             payouts.append({'display': value['display'],
                             'mult': str(value['mult']) + ' x ' + str(flat_bonus),
                             'reward': (value['mult'] * flat_bonus)})
@@ -379,7 +470,7 @@ def get_payouts(match_results, sum_id, cur_bet):
 
     payouts.append(total)
 
-    return payouts
+    return payouts, total['reward']
 
 
 async def process_discord_data_for_league_bet(data):
@@ -422,6 +513,7 @@ async def league_api_updates():
                             active_match = league_api.get_player_current_match(summoner_id)
                             [await listener(user_id, active_match) for listener in league_match_listeners]
                     except league_api.LeagueRequestError as err:
+                        #TODO this is wonky
                         [await listener(user_id) for listener in league_not_in_match_listeners]
                     except Exception as err:
                         log.error('League API update error.')
@@ -433,7 +525,8 @@ async def league_api_updates():
 async def set_game_for_pending_bets(user_id, active_match):
     try:
         # get all message ids with that bet target and edit the message to include a checkmark
-        # TODO this might be better to do one at a time. This way Beeven can ensure integrity of exactly what bets were locked in.
+        # TODO this might be better to do one at a time.
+        # TODO This way Beeven can ensure integrity of exactly what bets were locked in.
         if active_match['gameStartTime'] == 0:
             return
 
@@ -448,7 +541,7 @@ async def set_game_for_pending_bets(user_id, active_match):
                             conf_msg = await channel.fetch_message(pending_bet.message_id)
                             await conf_msg.edit(content=(':white_check_mark: ' + conf_msg.content))
                     except Exception as err:
-                        log.error('issue setting game id for bet %s'%(pending_bet.id))
+                        log.error('issue setting game id for bet %s'%(pending_bet.id,))
                         log.error(err)
                         continue
 
@@ -524,6 +617,12 @@ async def create_timer(user_id, channel, match_data):
         log.error('Create timer called after viable bet window.')
 
 
+def get_last_channel_or_default(guild):
+    last_channel_id = db_api.get_last_bet_channel(guild.id)
+    if not last_channel_id:
+        last_channel_id = [channel for channel in guild.channels if channel.type[0] == 'text'][0].id
+    return last_channel_id
+
 async def display_game_timers(user_id, match_data):
     game_start_time = match_data['gameStartTime']
     if game_start_time <= 0:
@@ -531,9 +630,7 @@ async def display_game_timers(user_id, match_data):
 
     async with timer_create_lock:
         for guild in bot.guilds:
-            last_channel_id = db_api.get_last_bet_channel(guild.id)
-            if not last_channel_id:
-                last_channel_id = [channel for channel in guild.channels if channel.type[0] == 'text'][0].id
+            last_channel_id = get_last_channel_or_default(guild)
             channel = bot.get_channel(last_channel_id)
             make_timer = True
             for timer in timer_displays:
@@ -704,10 +801,44 @@ async def set_flat_bonus(user_id=None):
     if not db_api.get_pending_bets():
         db_api.set_guild_bonus()
 
+
+async def set_game_ids(user_id, match_data):
+    game_id = match_data['gameId']
+    db_api.create_user_game(user_id, game_id)
+
+
+async def resolve_completed_games(user_id=None):
+    """Store match results in match history and resolve the bonus payouts for the match"""
+    for game in db_api.get_unresolved_games(user_id):
+        # get the stat payouts
+        match_results = league_api.get_match_results(str(game.game))
+        sum_id = db_api.get_user_summoner_id({'id': user_id})
+        stat_helper = AramStatHelper(match_results)
+        for guild in bot.guilds:
+            payouts, total = get_payouts(match_results, stat_helper, sum_id, guild.id)
+            last_channel_id = get_last_channel_or_default(guild)
+            channel = bot.get_channel(last_channel_id)
+            headers = ['Title', 'Stat', 'Reward']
+            rows = [value.values() for value in payouts]
+            header = 'Stat rewards for %s'%(display_username(user_id),)
+            msg = header + '```' + create_display_table(headers, rows, 24) + '```'
+            await channel.send(msg)
+            db_api.add_user_gold(user_id, guild.id, total)
+        db_api.resolve_game(game.id)
+
+
+
+
+
+
+
+
+
+
 guild_create_listeners = [init_user_info_cache]
 #presence_update_listeners = [set_user_state, process_discord_data_for_league_bet, resolve_pending_bets]
-league_match_listeners = [set_game_for_pending_bets, display_game_timers]
-league_not_in_match_listeners = [resolve_pending_bets, set_flat_bonus]
+league_match_listeners = [set_game_for_pending_bets, set_game_ids, display_game_timers]
+league_not_in_match_listeners = [resolve_pending_bets, set_flat_bonus, resolve_completed_games]
 
 """COMMANDS"""
 @bot.command()
@@ -759,6 +890,15 @@ async def instantiate_bet(ctx, target_user: str, win: str, amount: str):
 
     user_stats = db_api.get_user_stats(ctx.author.id, ctx.guild.id)
 
+    # if user_stats.gold <= 10:
+    #     # TODO case where user already has a bet placed
+    #     pending_bets = db_api.get_new_bets_by_target(target_user)
+    #     if not pending_bets:
+    #         await ctx.send('''Oh, you're poor. Here's a bet of 10, purely from pity''')
+    #         if user_stats.gold <= 0:
+    #             amount = 10
+    #             pity_flag = True
+
     if amount[-1] == '%':
         percentage = int(''.join([i for i in amount if i.isdigit()]))
         if 0 < percentage <= 100:
@@ -766,15 +906,6 @@ async def instantiate_bet(ctx, target_user: str, win: str, amount: str):
 
 
     amount = int(amount)
-
-    if user_stats.gold <= 10:
-        # TODO case where user already has a bet placed
-        pending_bets = db_api.get_new_bets_by_target(target_user)
-        if not pending_bets:
-            await ctx.send('''Oh, you're poor. Here's a bet of 10, purely from pity''')
-            if user_stats.gold <= 0:
-                amount = 10
-                pity_flag = True
 
     if amount <= 0:
         await ctx.send('Must bet amount greater than 0.')
