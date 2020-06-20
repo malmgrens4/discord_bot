@@ -1,8 +1,7 @@
 import configparser
 import logging
-import logging.config
 
-import db_api
+from src.apis import db_api
 import requests
 import json
 
@@ -10,14 +9,13 @@ import json
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-logging.config.fileConfig('config.ini')
 log = logging.getLogger(__name__)
 
 league_url = config['LEAGUE_API']['url']
 league_api_key = config['LEAGUE_API']['key']
 region = "NA"
 
-data_dragon_path = """./dragon/9.18.1/"""
+data_dragon_path = """./dragon/10.12.1/"""
 
 class LeagueRequestError(Exception):
     """Exception raised on bad league API requests"""
@@ -32,19 +30,17 @@ def request_error_wrapper(func):
         if r.get("status"):
             if r.get("status").get("status_code") >= 400:
                 log.error('400 on match request')
-                # parse the error to see if there is an issue decrypting the user id
 
                 if "Exception decrypting" in r.get("status").get("message"):
-                    log.error("Summoner ids expired")
+                    log.error("Summoner ids expired. Updating user ids")
                     update_summoner_ids()
                     return LeagueRequestError("Summoner ids expired")
 
                 if r.get("status").get("status_code") == 429:
+                    log.error("Rate limit exceeded.")
                     return LeagueRequestError("Rate Limit Exceeded")
 
                 if r.get("status").get("status_code") == 403:
-
-
                     log.error('API key expired')
                     raise LeagueRequestError("API key expired")
                 raise LeagueRequestError("400+ server response", r)
@@ -56,15 +52,22 @@ def request_error_wrapper(func):
 def get_player_current_match(summoner_id):
     return requests.get(league_url + '/lol/spectator/v4/active-games/by-summoner/' + summoner_id + '?api_key=' + league_api_key)
 
+
 @request_error_wrapper
 def get_match_results(game_id):
     return requests.get(league_url + '/lol/match/v4/matches/' + game_id + '?api_key=' + league_api_key)
 
+
+def get_summoner_id_from_username(league_name):
+    r = requests.get(
+        league_url + '/lol/summoner/v4/summoners/by-name/' + league_name + '?api_key=' + league_api_key)
+    sum_data = r.json()
+    return sum_data["id"]
+
+
 def update_summoner_ids():
     for user in db_api.get_users_all():
-        r = requests.get(league_url + '/lol/summoner/v4/summoners/by-name/' + user.league_name + '?api_key=' + league_api_key)
-        sum_data = r.json()
-        db_api.update_summoner_id(user.id, sum_data["id"])
+        db_api.update_summoner_id(user.id, get_summoner_id_from_username(user.league_name))
 
 
 def get_champ_image_path(champ_id: str):

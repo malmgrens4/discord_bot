@@ -1,19 +1,17 @@
 import configparser
-import logging
 import logging.config
-from datetime import datetime
+from datetime import datetime, timedelta
 from peewee import *
 
 
 config = configparser.ConfigParser()
-config.read('config.ini')
+config.read("config.ini")
 
-logging.config.fileConfig('config.ini')
-log = logging.getLogger(__name__)
+log = logging.getLogger()
 
 db = SqliteDatabase(config['DEFAULT']['database_path'])
 
-
+log.info("here!!")
 # So we don't have to redefine the db every time
 class BaseModel(Model):
     class Meta:
@@ -67,8 +65,8 @@ class MatchHistory(BaseModel):
 
 class MatchData(BaseModel):
     game = PrimaryKeyField()
-    match_data = TextField()
-
+    active_match_data = TextField(null=True)
+    match_data = TextField(null=True)
 
 db.connect()
 db.create_tables([Guild, User, UserGuildStats, UserBet, BalanceHistory, MatchHistory, MatchData])
@@ -101,17 +99,22 @@ def get_user_stats(user_id, guild_id):
         log.error(e)
 
 
+def init_new_user(guild, user_id, username, discriminator):
+    insert_or_update_user({'id': user_id, 'username': username, 'discriminator': discriminator})
+    return insert_or_update_user_guild_stats(guild, user_id, config['BETTING']['starting_gold'])
+
+
 def insert_or_update_user(user):
     try:
-        User.create(**user)
+        return User.get_or_create(**user)
     except Exception as err:
         log.error(err)
         print(err)
 
 
-def insert_or_update_user_guild_stats(user):
+def insert_or_update_user_guild_stats(guild, user_id, gold):
     try:
-        UserGuildStats.create(**user)
+        return UserGuildStats.get_or_create(guild=guild, user_id=user_id, gold=gold)
     except Exception as err:
         log.error(err)
         print(err)
@@ -221,15 +224,35 @@ def get_balances_by_guild(guild):
     try:
         query = UserGuildStats.select(User.username, UserGuildStats.gold)\
                             .join(User)\
-                            .where(UserGuildStats.guild == guild)
+                            .where(UserGuildStats.guild == guild).order_by(UserGuildStats.gold.desc())
         return [row for row in query]
     except Exception as err:
         log.error(err)
         print(err)
 
+
+def get_balance_history(user_id, guild_id, start_date = datetime.utcnow() - timedelta(days=7)):
+    try:
+        query = BalanceHistory.select().where((BalanceHistory.user == user_id),
+                                       (BalanceHistory.guild == guild_id),
+                                              BalanceHistory.date > start_date).order_by(BalanceHistory.date.asc())
+        return [row for row in query]
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
 def resolve_bet_by_id(bet_id, bet_result):
     try:
         UserBet.update({UserBet.resolved: True, UserBet.result: bet_result}).where(UserBet.id == bet_id).execute()
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
+def update_league_name(id, league_name):
+    try:
+        User.update({User.league_name: league_name}).where(User.id == id).execute()
     except Exception as err:
         log.error(err)
         print(err)
@@ -282,12 +305,46 @@ def get_guild_average(guild_id):
         log.error(err)
         print(err)
 
+
+def get_active_match_data(game_id):
+    try:
+        match = MatchData.get_by_id(game_id)
+        if match:
+            return match.active_match_data
+    except BaseException as err:
+        log.error(err)
+
+
+def store_active_match_data(game_id, active_match_data):
+    try:
+        return MatchData.create(game=game_id, active_match_data=active_match_data)
+    except Exception as err:
+        log.error("Issue storing active match results", err)
+
+
+def get_match_data(game_id):
+    try:
+        match = MatchData.get_by_id(game_id)
+        if match:
+            return match.match_data
+    except BaseException as err:
+        log.error(err)
+
+
+def store_match_data(game_id, match_data):
+    try:
+        return (MatchData.update(match_data=match_data).where(MatchData.game == game_id)).execute()
+    except Exception as err:
+        log.error("Issue storing match results", err)
+
+
 def get_guild_bonus(guild_id):
     try:
         return Guild.select(Guild.bonus).where(Guild.id == guild_id)[0].bonus
     except Exception as err:
         log.error(err)
         print(err)
+
 
 def set_guild_bonus():
 
