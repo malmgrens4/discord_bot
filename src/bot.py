@@ -1,7 +1,6 @@
 # Work with Python 3.6
 import asyncio
 import configparser
-import json
 import logging.config
 from discord.ext import commands
 from src import league_loop
@@ -24,7 +23,7 @@ TOKEN = config['DEFAULT']['discord_bot_token']
 URL = config['DEFAULT']['api_url']
 bot = commands.Bot(command_prefix='!')
 
-log.info("here")
+
 
 league_bet_updating = LeagueBetUpdating(bot)
 betting = Betting(bot)

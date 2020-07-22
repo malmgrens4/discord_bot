@@ -47,15 +47,19 @@ class LeagueBetUpdating(commands.Cog):
                         # TODO rollback transaction if both don't go through
                         did_win = stat_helper.get_stat('win', bet_target_summoner_id)
 
+                        channel = cur_bet.channel
+                        if not channel:
+                            channel = discord_utils.get_last_channel_or_default(cur_bet.guild)
+
                         prediction_right = did_win == bool(cur_bet.will_win)
 
                         user_id = cur_bet.user.id
-                        guild_id = cur_bet.guild
+                        guild_id = cur_bet.guild.id
 
                         db_api.add_user_gold(user_id, guild_id, payouts['reward'])
                         db_api.resolve_bet_by_id(cur_bet.id, prediction_right)
                         message = LeagueDisplays.get_payout_display(prediction_right, cur_bet, [payouts])
-                        await self.bot.get_channel(cur_bet.channel).send(message)
+                        await self.bot.get_channel(channel).send(message)
 
                     except Exception as err:
                         log.exception("""Issue resolving bet %s on game %s"""%(cur_bet.id, cur_bet.game_id))
@@ -78,31 +82,38 @@ class LeagueBetUpdating(commands.Cog):
 
     @staticmethod
     async def set_game_ids(user_id, match_data):
-        log.info("setting game id for %s", user_id)
-        game_id = match_data['gameId']
-        db_api.create_user_game(user_id, game_id)
+        log.info("setting game id for %s match %s", user_id, match_data['gameId'])
+        if match_data['gameType'] != 'CUSTOM_GAME':
+            game_id = match_data['gameId']
+            db_api.create_user_game(user_id, game_id)
+        else:
+            log.info("Custom game. Ignoring.")
 
 
     async def resolve_completed_games(self, user_id=None):
         """Store match results in match history and resolve the bonus payouts for the match"""
         log.info("Resolving completed games.")
-        for game in db_api.get_unresolved_games(user_id):
-            # get the stat payouts
-            match_results = self.get_stored_match_or_fetch(str(game.game))
-            sum_id = db_api.get_user_summoner_id({'id': user_id})
-            stat_helper = AramStatHelper(match_results)
-            for guild in self.bot.guilds:
-                if int(user_id) in list(map(lambda member: member.id, guild.members)):
-                    payouts, total = LeaguePayouts.get_payouts(match_results, stat_helper, sum_id, guild.id)
-                    last_channel_id = discord_utils.get_last_channel_or_default(guild)
-                    channel = self.bot.get_channel(last_channel_id)
-                    headers = ['Title', 'Stat', 'Reward']
-                    rows = [value.values() for value in payouts]
-                    header = 'Stat rewards for %s' % (format_helper.discord_display_at_username(user_id),)
-                    msg = header + '```' + format_helper.create_display_table(headers, rows, 24) + '```'
-                    await channel.send(msg)
-                    db_api.add_user_gold(user_id, guild.id, total)
-            db_api.resolve_game(game.id)
+        try:
+            for match_history in db_api.get_unresolved_games(user_id):
+                # get the stat payouts
+                match_results = self.get_stored_match_or_fetch(str(match_history.game_id))
+                sum_id = db_api.get_user_summoner_id({'id': user_id})
+                stat_helper = AramStatHelper(match_results)
+                for guild in self.bot.guilds:
+                    if int(user_id) in list(map(lambda member: member.id, guild.members)):
+                        payouts, total = LeaguePayouts.get_payouts(match_results, stat_helper, sum_id, guild.id)
+                        last_channel_id = discord_utils.get_last_channel_or_default(guild)
+                        channel = self.bot.get_channel(last_channel_id)
+                        headers = ['Title', 'Stat', 'Reward']
+                        rows = [value.values() for value in payouts]
+                        header = 'Stat rewards for %s' % (format_helper.discord_display_at_username(user_id),)
+                        msg = header + '```' + format_helper.create_display_table(headers, rows, 24) + '```'
+                        await channel.send(msg)
+                        db_api.add_user_gold(user_id, guild.id, total)
+                db_api.resolve_game(match_history.id)
+        except Exception as err:
+            log.error("Issue resolving completed game")
+            log.error(err)
 
 
     async def set_game_for_pending_bets(self, user_id, active_match):
@@ -110,7 +121,7 @@ class LeagueBetUpdating(commands.Cog):
             # get all message ids with that bet target and edit the message to include a checkmark
             # TODO this might be better to do one at a time.
             # TODO This way Beeven can ensure integrity of exactly what bets were locked in.
-            if active_match['gameStartTime'] == 0 and active_match['gameType'] != 'CUSTOM_GAME':
+            if active_match['gameStartTime'] == 0 or active_match['gameType'] == 'CUSTOM_GAME':
                 return
 
             bets_to_be_resolved = db_api.get_new_bets_by_target(user_id)

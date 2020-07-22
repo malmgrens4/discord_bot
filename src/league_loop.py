@@ -11,7 +11,7 @@ league_not_in_match_listeners = []
 
 async def league_api_updates():
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(10)
         try:
             for user_id in [str(user.id) for user in db_api.get_users()]:
                 await asyncio.sleep(1)

@@ -18,26 +18,6 @@ class LeaguePayouts(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    async def resolve_completed_games(self, user_id=None):
-        """Store match results in match history and resolve the bonus payouts for the match"""
-        for game in db_api.get_unresolved_games(user_id):
-            # get the stat payouts
-            match_results = league_api.get_match_results(str(game.game))
-            sum_id = db_api.get_user_summoner_id({'id': user_id})
-            stat_helper = AramStatHelper(match_results)
-            for guild in self.bot.guilds:
-                payouts, total = self.get_payouts(match_results, stat_helper, sum_id, guild.id)
-                last_channel_id = discord_utils.get_last_channel_or_default(guild)
-                channel = self.bot.get_channel(last_channel_id)
-                headers = ['Title', 'Stat', 'Reward']
-                rows = [value.values() for value in payouts]
-                header = 'Stat rewards for %s' % (format_helper.discord_display_at_username(user_id),)
-                msg = header + '```' + format_helper.create_display_table(headers, rows, 24) + '```'
-                await channel.send(msg)
-                db_api.add_user_gold(user_id, guild.id, total)
-            db_api.resolve_game(game.id)
-
-
     @staticmethod
     def get_bet_payout(stat_helper, sum_id, cur_bet):
         did_win = stat_helper.get_stat('win', sum_id)
@@ -55,7 +35,15 @@ class LeaguePayouts(commands.Cog):
         if total_kills <= 0:
             ka_mult = 0
         else:
-            ka_mult = (stat_helper.get_stat('kills', sum_id) * 3) / total_kills
+            kills = stat_helper.get_stat('kills', sum_id)
+            assists = stat_helper.get_stat('assists', sum_id)
+            kill_participation = (kills + assists)/total_kills
+            if kill_participation > .2:
+                ka_mult = kill_participation
+            elif kill_participation == .2:
+                ka_mult = 0
+            else:
+                ka_mult = -(.2 - kill_participation)
 
         def ka_payout():
             assist_mult = .5

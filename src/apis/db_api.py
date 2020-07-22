@@ -10,8 +10,6 @@ config.read("config.ini")
 log = logging.getLogger()
 
 db = SqliteDatabase(config['DEFAULT']['database_path'])
-
-log.info("here!!")
 # So we don't have to redefine the db every time
 class BaseModel(Model):
     class Meta:
@@ -25,21 +23,23 @@ class User(BaseModel):
     league_puuid = TextField(null=True)
     league_name = TextField(null=True)
 
-class UserGuildStats(BaseModel):
-    guild = IntegerField(null=False)
-    user = ForeignKeyField(User, backref='guild_stats')
-    gold = IntegerField(null=True)
+class Guild(BaseModel):
+    id = PrimaryKeyField()
+    bonus = IntegerField(null=True)
+    name = TextField(null=True)
 
-    class Meta:
-        primary_key = CompositeKey('guild', 'user')
+class MatchData(BaseModel):
+    id = PrimaryKeyField()
+    active_match_data = TextField(null=True)
+    match_data = TextField(null=True)
 
 class UserBet(BaseModel):
     user = ForeignKeyField(User, backref='bets')
-    guild = IntegerField()
-    channel = IntegerField()
+    guild = ForeignKeyField(Guild, backref='guild_bets')
+    channel = IntegerField(null=True)
     bet_target = ForeignKeyField(User, backref='bets_on')
     game_name = TextField(null=True)
-    game_id = TextField(null=True)
+    game = ForeignKeyField(MatchData, backref='game_info', null=True)
     will_win = BooleanField()
     amount = IntegerField()
     resolved = BooleanField(default=False)
@@ -47,26 +47,29 @@ class UserBet(BaseModel):
     message_id = TextField(null=True)
     time_placed =  DateTimeField(default=datetime.utcnow, null=False)
 
+
 class BalanceHistory(BaseModel):
     user = ForeignKeyField(User, backref='balance_history')
-    guild = IntegerField()
+    guild = ForeignKeyField(Guild, backref='guild_balance_history')
     gold = IntegerField(null=False)
     date = DateTimeField(default=datetime.utcnow, null=False)
 
-class Guild(BaseModel):
-    id = PrimaryKeyField()
-    bonus = IntegerField(null=True)
+
+class UserGuildStats(BaseModel):
+    guild = ForeignKeyField(Guild, backref='guild')
+    user = ForeignKeyField(User, backref='guild_stats')
+    gold = IntegerField(null=True)
+
+    class Meta:
+        primary_key = CompositeKey('guild', 'user')
+
 
 class MatchHistory(BaseModel):
     id = PrimaryKeyField()
-    game = IntegerField(null=False)
+    game = ForeignKeyField(MatchData, backref="matches_data")
     user = ForeignKeyField(User, backref='match_history')
     resolved = BooleanField(null=False, default=0)
 
-class MatchData(BaseModel):
-    game = PrimaryKeyField()
-    active_match_data = TextField(null=True)
-    match_data = TextField(null=True)
 
 db.connect()
 db.create_tables([Guild, User, UserGuildStats, UserBet, BalanceHistory, MatchHistory, MatchData])
@@ -90,11 +93,39 @@ def add_user_gold(user_id, guild_id, amount):
         log.error(e)
 
 
+def get_user_guilds(user_id):
+    try:
+        return Guild.select(Guild.id, Guild.name) \
+                .join(UserGuildStats) \
+                .where(UserGuildStats.user_id == user_id).execute()
+    except Exception as e:
+        log.error(e)
+
+
 def get_user_stats(user_id, guild_id):
     try:
-        log.info('Get user stats: User: %s Guild: %s'%(user_id, guild_id))
         return UserGuildStats.get(UserGuildStats.user == user_id,
                                   UserGuildStats.guild == guild_id)
+    except Exception as e:
+        log.error(e)
+
+
+def get_user_pending_bets_by_match(user_id, guild_id, match_id):
+    try:
+        return UserBet.select().where((UserBet.user == user_id) &
+                                      (UserBet.game == match_id) &
+                                      (UserBet.resolved == False) &
+                                      (UserBet.guild == guild_id))
+    except Exception as e:
+        log.error(e)
+
+
+def get_user_new_bets(user_id, guild_id):
+    try:
+        return UserBet.select().where((UserBet.user == user_id) &
+                                      (UserBet.game_id.is_null(True)) &
+                                      (UserBet.resolved == False) &
+                                      (UserBet.guild == guild_id))
     except Exception as e:
         log.error(e)
 
@@ -129,6 +160,21 @@ def create_bet(bet):
         print(err)
 
 
+def get_bet(bet_id):
+    try:
+        return UserBet.get_by_id(bet_id)
+    except Exception as err:
+        log.error(err)
+
+def delete_bet(bet_id):
+    try:
+        bet = UserBet.get_by_id(bet_id)
+        bet.delete_instance()
+        return bet
+    except Exception as err:
+        log.error(err)
+
+
 def sub_user_gold(user_id, guild_id, amount):
     try:
         if amount > 0:
@@ -143,6 +189,14 @@ def get_user_summoner_id(user):
     try:
         response = User.get_by_id(user['id'])
         return response.summoner_id
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
+def get_user_by_id(user_id):
+    try:
+        return User.get_by_id(user_id)
     except Exception as err:
         log.error(err)
         print(err)
@@ -285,6 +339,32 @@ def get_new_bets_by_target(bet_target):
         print(err)
 
 
+def get_guild_by_id(guild_id):
+    try:
+        return Guild.get_by_id(guild_id)
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
+def get_guild_members(guild_id):
+        try:
+            return (User.select(User.id, User.username, User.summoner_id, User.league_name)\
+                .join(UserGuildStats).where(UserGuildStats.guild == guild_id)).execute()
+        except Exception as err:
+            log.error(err)
+            print(err)
+
+
+def get_guild_stats(guild_id):
+    try:
+        return (UserGuildStats.select() \
+                .join(User).where(UserGuildStats.guild == guild_id)).execute()
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
 def get_guild_total(guild_id):
     try:
         result = (UserGuildStats.select(fn.SUM(UserGuildStats.gold).alias('total'))
@@ -315,13 +395,6 @@ def get_active_match_data(game_id):
         log.error(err)
 
 
-def store_active_match_data(game_id, active_match_data):
-    try:
-        return MatchData.create(game=game_id, active_match_data=active_match_data)
-    except Exception as err:
-        log.error("Issue storing active match results", err)
-
-
 def get_match_data(game_id):
     try:
         match = MatchData.get_by_id(game_id)
@@ -331,9 +404,119 @@ def get_match_data(game_id):
         log.error(err)
 
 
+def get_guild_win_rate(guild_id, start_date):
+    try:
+        correct_count = Case(UserBet.result, ((1, 1),), 0)
+        if start_date:
+            return (UserBet.select(UserBet.user, UserBet.guild,
+                                   fn.date_trunc('day', UserBet.time_placed).alias("date"),
+                                      (Cast(fn.SUM(correct_count), 'float') / fn.COUNT(UserBet.result)).alias("win_rate"))
+                       .where((UserBet.guild == guild_id) & (UserBet.time_placed >= start_date)).group_by(UserBet.user, UserBet.guild, fn.date_trunc('day', UserBet.time_placed))).execute()
+
+        else:
+            return (UserBet.select(UserBet.user, UserBet.guild, UserBet.bet_target, UserBet.game_name,
+
+                                   fn.date_trunc('day', UserBet.time_placed).alias("date"),
+                                   (Cast(fn.SUM(correct_count), 'float') / fn.COUNT(UserBet.result)).alias("win_rate"))
+                    .where((UserBet.guild == guild_id)).group_by(UserBet.user, UserBet.guild, fn.date_trunc('day', UserBet.time_placed))).execute()
+    except BaseException as err:
+        log.error(err)
+
+
+def get_guild_bet_history(guild_id, start_date):
+    try:
+        if start_date:
+            return (UserBet.select(
+                        UserBet.id,
+                        UserBet.user,
+                        UserBet.guild,
+                        UserBet.bet_target,
+                        UserBet.game_name,
+                        UserBet.amount,
+                        UserBet.resolved,
+                        UserBet.result,
+                        UserBet.will_win,
+                        UserBet.bet_target
+            ).where((UserBet.guild == guild_id) & (UserBet.resolved == True) & (UserBet.time_placed > start_date))).execute()
+        else:
+            return (UserBet.select(
+                        UserBet.id,
+                        UserBet.user,
+                        UserBet.guild,
+                        UserBet.bet_target,
+                        UserBet.game_name,
+                        UserBet.amount,
+                        UserBet.resolved,
+                        UserBet.result,
+                        UserBet.will_win,
+                        UserBet.bet_target
+            ).where((UserBet.guild == guild_id)& (UserBet.resolved == True))).execute()
+
+    except Exception as err:
+        log.error(err)
+
+def get_guild_bet_counts(guild_id, start_date):
+    try:
+        if start_date:
+            return (UserBet.select(
+                UserBet.user,
+                UserBet.guild,
+                fn.SUM(UserBet.result).alias('wins'), (fn.Count(UserBet.result) - fn.SUM(UserBet.result)).alias('losses'))
+                    .where((UserBet.guild == guild_id) & (
+            UserBet.time_placed > start_date)).group_by(UserBet.user, UserBet.guild)).execute()
+        else:
+            return (UserBet.select(
+                UserBet.user,
+                UserBet.guild,
+                fn.SUM(UserBet.result).alias('wins'), (fn.Count(UserBet.result) - fn.SUM(UserBet.result)).alias('losses'))
+                    .where((UserBet.guild == guild_id)).group_by(UserBet.user, UserBet.guild)).execute()
+
+    except Exception as err:
+        log.error(err)
+
+def get_guild_bet_profits(guild_id, start_date):
+    try:
+        profits = Case(None, [(UserBet.result == True, UserBet.amount)], -1 * UserBet.amount)
+        if start_date:
+            return (UserBet.select(
+                UserBet.user,
+                UserBet.guild,
+                fn.SUM(profits).alias("profit"))
+                    .where((UserBet.guild == guild_id) & (UserBet.time_placed > start_date))
+                    .group_by(UserBet.user, UserBet.guild)).execute()
+        else:
+            return (UserBet.select(
+                UserBet.user,
+                UserBet.guild,
+                fn.SUM(profits).alias("profit"))
+                    .where((UserBet.guild == guild_id))
+                    .group_by(UserBet.user, UserBet.guild)).execute()
+
+    except Exception as err:
+        log.error(err)
+
+
+
+def store_active_match_data(game_id, active_match_data):
+    try:
+        return (MatchData.insert(id=game_id, active_match_data=active_match_data).on_conflict(
+            conflict_target=[MatchData.id],
+            preserve=[MatchData.active_match_data],
+            update={MatchData.active_match_data: active_match_data}
+        )).execute()
+    except Exception as err:
+        log.error("Issue storing active match results", err)
+
+
+def get_match(game_id):
+    try:
+        return MatchData.get_by_id(game_id)
+    except BaseException as err:
+        log.error(err)
+
 def store_match_data(game_id, match_data):
     try:
-        return (MatchData.update(match_data=match_data).where(MatchData.game == game_id)).execute()
+        return (MatchData.update(match_data=match_data).where(MatchData.id == game_id)).execute()
     except Exception as err:
         log.error("Issue storing match results", err)
 
@@ -419,6 +602,15 @@ def get_unresolved_games(user_id):
         log.error(err)
         print(err)
 
+def get_guild_unresolved_games(guild_id):
+    try:
+        return (MatchHistory.select(MatchHistory.id, MatchHistory.user, MatchHistory.game, MatchHistory.resolved)\
+            .join(UserGuildStats, on=((UserGuildStats.guild_id == guild_id) & (UserGuildStats.user == MatchHistory.user)))\
+            .where(((MatchHistory.resolved == False) | (MatchHistory.resolved.is_null(True)) )& (MatchHistory.game.is_null(False)))).execute()
+    except Exception as err:
+        log.error(err)
+        print(err)
+
 def resolve_game(match_id):
     try:
         MatchHistory.update({MatchHistory.resolved: True}).where(MatchHistory.id==match_id).execute()
@@ -426,10 +618,20 @@ def resolve_game(match_id):
         log.error(err)
         print(err)
 
+def get_guild_balance_history(guild_id, start_date):
+    try:
+        if start_date:
+            return BalanceHistory.select().where(BalanceHistory.guild == guild_id).where(BalanceHistory.date > start_date).execute()
+        else:
+            return BalanceHistory.select().where(BalanceHistory.guild == guild_id).execute()
+    except Exception as err:
+        log.error(err)
+        print(err)
+
 
 
 aram_basic_rewards = {
-    "sightWardsBoughtInGame":  {'mult': .01, 'display': 'Sight wards'},
+    "sightWardsBoughtInGame":  {'mult': .1, 'display': 'Sight wards'},
     "firstBloodKill":  {'mult': .2, 'display': 'First blood'},
     "killingSprees":  {'mult': .1, 'display': 'Killing sprees'},
     "unrealKills":  {'mult': 1, 'display': 'Unreal kills'},
@@ -438,8 +640,9 @@ aram_basic_rewards = {
     "tripleKills":  {'mult': .30, 'display': 'Triple kills'},
     "quadraKills":  {'mult': .40, 'display': 'Quadra kills'},
     "pentaKills":  {'mult': .6, 'display': 'Penta kills'},
-    "visionWardsBoughtInGame":  {'mult': .01, 'display': 'Vision wards bought'},
+    "visionWardsBoughtInGame":  {'mult': .1, 'display': 'Vision wards bought'},
     "timeCCingOthers":  {'mult': .01, 'display': 'Total CC (s)'},
+    "damageDealtToObjectives": {'mult': .00008, 'display': 'Total dmg to obj'}
 }
 
 aram_highest_rewards = {
@@ -466,7 +669,3 @@ aram_lowest_rewards = {
     "goldEarned": {'mult': -.1, 'display': 'Dead broke'},
     "totalMinionsKilled": {'mult': -.02, 'display': 'Minion apologist'},
 }
-
-
-
-

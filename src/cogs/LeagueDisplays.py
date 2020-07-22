@@ -54,8 +54,7 @@ class LeagueDisplays(commands.Cog):
     async def create_timer(self, user_id, channel, match_data):
         try:
             game_start_time = match_data['gameStartTime']
-            teams = self.get_match_players(match_data)
-            await self.send_game_images(channel, teams)
+            await self.send_game_images(channel, match_data)
             message_id = await channel.send('Time until betting is closed for %s' % ([format_helper.discord_display_at_username(user_id)]))
             new_timer = TimerDisplay(match_data['gameId'], channel, message_id, [user_id], game_start_time)
             self.timer_displays.append(new_timer)
@@ -63,7 +62,16 @@ class LeagueDisplays(commands.Cog):
         except Exception as err:
             log.exception("""Failure to create timer for user %s in channel %s"""%(user_id, channel.id))
 
-    async def send_game_images(self, channel, teams):
+    async def send_game_images(self, channel, match_data):
+        final_cmb = LeagueDisplays.get_game_image(match_data)
+        final_cmb.save('final.png')
+        file = discord.File('./final.png', filename='match.png')
+        await channel.send("", files=[file])
+
+
+    @staticmethod
+    def get_game_image(match_data):
+        teams = LeagueDisplays.get_match_players(match_data)
         try:
             final_images = []
             font = ImageFont.truetype("./fonts/Roboto-Black.ttf", 12)
@@ -116,13 +124,10 @@ class LeagueDisplays(commands.Cog):
             draw.text((text_x + 1, text_y), "VS", (0, 0, 0), font=vs_font)
             draw.text((text_x, text_y), "VS", (255, 255, 255), font=vs_font)
 
-            final_cmb.save('final.png')
+            return final_cmb
 
-            file = discord.File('./final.png', filename='match.png')
-            await channel.send("", files=[file])
         except Exception as err:
             log.exception("Issue creating league matchup image")
-
 
     @staticmethod
     def get_match_players(cur_match_data):
