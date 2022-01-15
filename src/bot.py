@@ -11,6 +11,7 @@ from src.cogs.LeaguePayouts import LeaguePayouts
 from src.cogs.Common import Common
 from src.cogs.Meme import Meme
 from src.cogs.Reports import Reports
+from src.cogs.MetaReports import MetaReports
 
 config = configparser.ConfigParser()
 config.read('config.ini')
@@ -31,6 +32,7 @@ league_displays = LeagueDisplays(bot)
 league_payouts = LeaguePayouts(bot)
 meme = Meme(bot)
 reports = Reports(bot)
+meta_reports = MetaReports(bot)
 general = Common(bot)
 
 bot.add_cog(league_bet_updating)
@@ -39,6 +41,7 @@ bot.add_cog(league_displays)
 bot.add_cog(league_payouts)
 bot.add_cog(meme)
 bot.add_cog(reports)
+bot.add_cog(meta_reports)
 bot.add_cog(Common(bot))
 
 league_loop.subscribe_to_league(league_bet_updating)

@@ -22,7 +22,6 @@ class TimerDisplay:
         self.users = users
         self.time_left = self.bet_window_ms - ((round(time.time() * 1000)) - self.game_start_time)
 
-
     async def update(self):
         self.time_left = self.bet_window_ms - ((round(time.time() * 1000)) - self.game_start_time)
         if self.time_left <= 0:
@@ -32,7 +31,6 @@ class TimerDisplay:
 
         mins, secs = divmod(int(self.time_left/1000), 60)
         timeformat = '{:02d}:{:02d}'.format(mins, secs)
-
 
         time_left_msg = await self.channel.fetch_message(self.message.id)
         new_msg = '%s left to bet for %s'%(timeformat, [format_helper.discord_display_at_username(user) for user in self.users])

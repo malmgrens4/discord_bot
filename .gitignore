@@ -13,9 +13,12 @@ sdist
 var/
 wheels/
 pyenv/
+**/__pycache__/**
 pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
+*.log
+*.sqlite3

@@ -145,6 +145,7 @@ def insert_or_update_user(user):
 
 def insert_or_update_user_guild_stats(guild, user_id, gold):
     try:
+        #TODO checks for match on user gold - check user then update gold
         return UserGuildStats.get_or_create(guild=guild, user_id=user_id, gold=gold)
     except Exception as err:
         log.error(err)
@@ -642,7 +643,8 @@ aram_basic_rewards = {
     "pentaKills":  {'mult': .6, 'display': 'Penta kills'},
     "visionWardsBoughtInGame":  {'mult': .1, 'display': 'Vision wards bought'},
     "timeCCingOthers":  {'mult': .01, 'display': 'Total CC (s)'},
-    "damageDealtToObjectives": {'mult': .00008, 'display': 'Total dmg to obj'}
+    "damageDealtToObjectives": {'mult': .00008, 'display': 'Total dmg to obj'},
+    "visionScore": {'mult': .01, 'display': 'Vision Score'},
 }
 
 aram_highest_rewards = {
@@ -660,6 +662,7 @@ aram_highest_rewards = {
     "totalMinionsKilled": {'mult': .2, 'display': 'Minion slayer'},
     "timeCCingOthers": {'mult': .2, 'display': 'King Pin (CC)'},
     "deaths": {'mult': -.2, 'display': 'Feeder lord'},
+    "visionScore": {'mult': .2, 'display': 'Eagle eye'},
 }
 
 aram_lowest_rewards = {
