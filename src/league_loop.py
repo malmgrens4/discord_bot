@@ -9,6 +9,7 @@ log = logging.getLogger(__name__)
 league_match_listeners = []
 league_not_in_match_listeners = []
 
+
 async def league_api_updates():
     while True:
         await asyncio.sleep(10)
@@ -43,5 +44,14 @@ def get_stored_match_or_request(user_id):
 def subscribe_to_league(subscriber):
     league_match_listeners.append(subscriber)
 
+
 def subscribe_to_not_in_league(subscriber):
     league_not_in_match_listeners.append(subscriber)
+
+
+def unsubscribe_league(subscriber):
+    league_match_listeners.remove(subscriber)
+
+
+def unsubscribe_not_in_league(subscriber):
+    league_not_in_match_listeners.remove(subscriber)

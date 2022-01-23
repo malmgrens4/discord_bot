@@ -5,7 +5,7 @@ import asyncio
 from src.utils.AramStatHelper import AramStatHelper
 from src.utils import discord_utils, format_helper
 from src.apis import db_api, league_api
-
+from src.league_loop import subscribe_to_league,subscribe_to_not_in_league
 from src.cogs.LeaguePayouts import LeaguePayouts
 from src.cogs.LeagueDisplays import LeagueDisplays
 from discord.ext import commands
@@ -22,7 +22,6 @@ class LeagueBetUpdating(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.bet_resolve_lock = asyncio.Lock()
-
 
     async def resolve_pending_bets(self, data=None):
         log.info("Attempting to resolve bets")
@@ -115,7 +114,6 @@ class LeagueBetUpdating(commands.Cog):
             log.error("Issue resolving completed game")
             log.error(err)
 
-
     async def set_game_for_pending_bets(self, user_id, active_match):
         try:
             # get all message ids with that bet target and edit the message to include a checkmark
@@ -146,11 +144,9 @@ class LeagueBetUpdating(commands.Cog):
             log.error('issue setting game for pending bets.')
             log.error(err)
 
-
     async def on_league_match(self, *args):
         await self.set_game_ids(*args)
         await self.set_game_for_pending_bets(*args)
-
 
     async def no_match(self, *args):
         await self.resolve_pending_bets(*args)
@@ -158,4 +154,7 @@ class LeagueBetUpdating(commands.Cog):
 
 
 def setup(bot):
-    bot.add_cog(LeagueBetUpdating(bot))
+    bet_updating = LeagueBetUpdating(bot)
+    bot.add_cog(bet_updating)
+    subscribe_to_league(bet_updating)
+    subscribe_to_not_in_league(bet_updating)

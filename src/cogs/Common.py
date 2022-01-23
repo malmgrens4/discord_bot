@@ -7,26 +7,26 @@ log = logging.getLogger()
 config = configparser.ConfigParser()
 config.read('config.ini')
 
+
 class Common(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
 
-
     @commands.command()
     async def ping(self, ctx):
-        '''
+        """
         Check bot latency
-        '''
+        """
         log.info('here')
         latency = self.bot.latency
         await ctx.send(latency)
 
     @commands.command()
     async def register(self, ctx, summoner_name):
-        '''
+        """
         Register league name with discord account
-        '''
+        """
         author = ctx.message.author.id
         log.info("User %s registering with account name %s", author, summoner_name)
         try:

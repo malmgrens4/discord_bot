@@ -4,6 +4,7 @@ import logging
 from src.apis import db_api
 import requests
 import json
+from requests import Request
 
 
 config = configparser.ConfigParser()
@@ -15,7 +16,7 @@ league_url = config['LEAGUE_API']['url']
 league_api_key = config['LEAGUE_API']['key']
 region = "NA"
 
-data_dragon_path = """./dragon/10.12.1/"""
+data_dragon_path = """./dragon/12.1.1/"""
 
 class LeagueRequestError(Exception):
     """Exception raised on bad league API requests"""
@@ -26,23 +27,23 @@ class LeagueRequestError(Exception):
 
 def request_error_wrapper(func):
     def wrapper(*args, **kwargs):
-        r = func(*args, **kwargs).json()
+        r: Request = func(*args, **kwargs).json()
         if r.get("status"):
             if r.get("status").get("status_code") >= 400:
-                log.error('400 on match request')
+                log.error("4XX on match request: " + r.url)
 
                 if "Exception decrypting" in r.get("status").get("message"):
                     log.error("Summoner ids expired. Updating user ids")
                     update_summoner_ids()
-                    return LeagueRequestError("Summoner ids expired")
+                    raise LeagueRequestError("Summoner ids expired", r.url)
 
                 if r.get("status").get("status_code") == 429:
                     log.error("Rate limit exceeded.")
-                    return LeagueRequestError("Rate Limit Exceeded")
+                    raise LeagueRequestError("Rate Limit Exceeded", r.url)
 
                 if r.get("status").get("status_code") == 403:
                     log.error('API key expired')
-                    raise LeagueRequestError("API key expired")
+                    raise LeagueRequestError("API key expired" + r.url)
                 raise LeagueRequestError("400+ server response", r)
         return r
     return wrapper

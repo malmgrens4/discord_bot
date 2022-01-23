@@ -45,7 +45,7 @@ class UserBet(BaseModel):
     resolved = BooleanField(default=False)
     result = BooleanField(null=True)
     message_id = TextField(null=True)
-    time_placed =  DateTimeField(default=datetime.utcnow, null=False)
+    time_placed = DateTimeField(default=datetime.utcnow, null=False)
 
 
 class BalanceHistory(BaseModel):

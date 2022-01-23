@@ -6,6 +6,7 @@ import discord
 import numpy as np
 from art import text2art
 from src.utils.TimerDisplay import TimerDisplay
+from src.league_loop import subscribe_to_league
 from src.utils import format_helper, discord_utils
 from src.apis import league_api
 from PIL import Image, ImageFont, ImageDraw
@@ -15,6 +16,7 @@ config = configparser.ConfigParser()
 config.read('config.ini')
 
 log = logging.getLogger()
+
 
 class LeagueDisplays(commands.Cog):
     """League specific displays"""
@@ -140,7 +142,6 @@ class LeagueDisplays(commands.Cog):
 
         return teams
 
-
     @staticmethod
     def get_payout_display(bet_right, cur_bet, bet_results):
         headers = ['Title', 'Stat', 'Reward']
@@ -156,7 +157,6 @@ class LeagueDisplays(commands.Cog):
         header = ">>> <@!%s> bet on <@!%s> for %s" % (cur_bet.user_id, cur_bet.bet_target, cur_bet.amount)
         return header + "```" + msg + "```"
 
-
     async def display_bet_windows(self):
         while True:
             try:
@@ -169,6 +169,8 @@ class LeagueDisplays(commands.Cog):
                 log.error(err)
                 log.error('Timer issue')
 
+    async def on_league_match(self, *args):
+        await self.display_game_timers(*args)
 
     # async def clear_timers(self):
     #     async with self.timer_create_lock:
@@ -177,9 +179,7 @@ class LeagueDisplays(commands.Cog):
     #                 self.timer_displays.remove(timer)
 
 
-    async def on_league_match(self, *args):
-        await self.display_game_timers(*args)
-
-
 def setup(bot):
-    bot.add_cog(LeagueDisplays(bot))
+    league_displays = LeagueDisplays(bot)
+    bot.add_cog(league_displays)
+    return league_displays

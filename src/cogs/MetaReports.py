@@ -84,3 +84,7 @@ class MetaReports(commands.Cog):
         for emoji, count in emoji_dict.items():
              display_string += f'**{count}** {emoji}, '
         return display_string
+
+
+def setup(bot):
+    bot.add_cog(MetaReports(bot))
