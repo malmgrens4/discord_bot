@@ -186,6 +186,15 @@ def sub_user_gold(user_id, guild_id, amount):
         print(err)
 
 
+def get_user_puuid(user):
+    try:
+        response = User.get_by_id(user['id'])
+        return response.league_puuid
+    except Exception as err:
+        log.error(err)
+        print(err)
+
+
 def get_user_summoner_id(user):
     try:
         response = User.get_by_id(user['id'])
@@ -313,9 +322,9 @@ def update_league_name(id, league_name):
         print(err)
 
 
-def update_summoner_id(id, summoner_id):
+def update_summoner_id_and_puuid(id, summoner_id, league_puuid):
     try:
-        User.update({User.summoner_id: summoner_id}).where(User.id == id).execute()
+        User.update({User.summoner_id: summoner_id, User.league_puuid: league_puuid}).where(User.id == id).execute()
     except Exception as err:
         log.error(err)
         print(err)

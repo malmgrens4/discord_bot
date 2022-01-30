@@ -19,24 +19,24 @@ class LeaguePayouts(commands.Cog):
         self.bot = bot
 
     @staticmethod
-    def get_bet_payout(stat_helper, sum_id, cur_bet):
-        did_win = stat_helper.get_stat('win', sum_id)
+    def get_bet_payout(stat_helper, league_puuid, cur_bet):
+        did_win = stat_helper.get_stat('win', league_puuid)
         reward = 2 * cur_bet.amount if did_win == cur_bet.will_win else 0
         return {'display': 'Win', 'mult': '', 'reward': reward}
 
 
     @staticmethod
-    def get_payouts(match_results, stat_helper, sum_id, guild):
+    def get_payouts(match_results, stat_helper, league_puuid, guild):
         """Returns dict containing the title and amount of a payout reward for a given game based off of the summoner"""
         stat_helper = AramStatHelper(match_results)
         flat_bonus = 100
 
-        total_kills = stat_helper.get_team_total_by_stat('kills', sum_id)
+        total_kills = stat_helper.get_team_total_by_stat('kills', league_puuid)
         if total_kills <= 0:
             ka_mult = 0
         else:
-            kills = stat_helper.get_stat('kills', sum_id)
-            assists = stat_helper.get_stat('assists', sum_id)
+            kills = stat_helper.get_stat('kills', league_puuid)
+            assists = stat_helper.get_stat('assists', league_puuid)
             kill_participation = (kills + assists)/total_kills
             if kill_participation > .2:
                 ka_mult = kill_participation
@@ -47,19 +47,19 @@ class LeaguePayouts(commands.Cog):
 
         def ka_payout():
             assist_mult = .5
-            ka = (((stat_helper.get_stat('kills', sum_id) * flat_bonus) + (
-            assist_mult * stat_helper.get_stat('assists', sum_id) * flat_bonus)) * ka_mult) * .25
+            ka = (((stat_helper.get_stat('kills', league_puuid) * flat_bonus) + (
+            assist_mult * stat_helper.get_stat('assists', league_puuid) * flat_bonus)) * ka_mult) * .25
             return ka
 
-        total_enemy_kills =  stat_helper.get_team_total_by_stat('kills', sum_id, False)
+        total_enemy_kills =  stat_helper.get_team_total_by_stat('kills', league_puuid, False)
 
         if total_enemy_kills <= 0:
             death_mult = 1
         else:
-            death_mult = ((stat_helper.get_stat('deaths', sum_id) * 5) / total_enemy_kills * .25)
+            death_mult = ((stat_helper.get_stat('deaths', league_puuid) * 5) / total_enemy_kills * .25)
 
         def death_payout():
-            deaths = -((stat_helper.get_stat('deaths', sum_id) * flat_bonus) * death_mult)
+            deaths = -((stat_helper.get_stat('deaths', league_puuid) * flat_bonus) * death_mult)
 
             return deaths
 
@@ -68,19 +68,19 @@ class LeaguePayouts(commands.Cog):
                 return str(mult)
             return str(mult) + ' x ' + ('%.2f' % value if value % 1 else str(value))
 
-        ka = {'display': 'Kills/Assists', 'mult': str(stat_helper.get_stat('kills', sum_id)) + '/'
-                                                  + str(stat_helper.get_stat('assists', sum_id))
+        ka = {'display': 'Kills/Assists', 'mult': str(stat_helper.get_stat('kills', league_puuid)) + '/'
+                                                  + str(stat_helper.get_stat('assists', league_puuid))
                                                   + ' x ' + format_mult(flat_bonus, ka_mult)
             , 'reward': ka_payout()}
 
-        deaths = {'display': 'Deaths', 'mult': format_mult(-1, stat_helper.get_stat('deaths', sum_id))
+        deaths = {'display': 'Deaths', 'mult': format_mult(-1, stat_helper.get_stat('deaths', league_puuid))
                                                + ' x ' + format_mult(flat_bonus, death_mult), 'reward': death_payout()}
 
         payouts = [ka, deaths]
 
         for key, value in db_api.aram_basic_rewards.items():
             try:
-                stat = stat_helper.get_stat(key, sum_id)
+                stat = stat_helper.get_stat(key, league_puuid)
                 if stat != 0:
                     payouts.append({'display': value['display'],
                                     'mult': format_mult(value['mult'], stat) + ' x ' + str(flat_bonus),
@@ -90,7 +90,7 @@ class LeaguePayouts(commands.Cog):
 
         for key, value in db_api.aram_highest_rewards.items():
             try:
-                if stat_helper.is_highest_in_game(key, sum_id):
+                if stat_helper.is_highest_in_game(key, league_puuid):
                     payouts.append({'display': value['display'],
                                     'mult': str(value['mult']) + ' x ' + str(flat_bonus),
                                     'reward': (value['mult'] * flat_bonus)})
@@ -99,7 +99,7 @@ class LeaguePayouts(commands.Cog):
 
         for key, value in db_api.aram_lowest_rewards.items():
             try:
-                if stat_helper.is_lowest_in_game(key, sum_id):
+                if stat_helper.is_lowest_in_game(key, league_puuid):
                     payouts.append({'display': value['display'],
                                 'mult': str(value['mult']) + ' x ' + str(flat_bonus),
                                 'reward': (value['mult'] * flat_bonus)})

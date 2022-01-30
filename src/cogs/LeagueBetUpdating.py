@@ -15,6 +15,7 @@ config.read('config.ini')
 
 log = logging.getLogger()
 
+
 class LeagueBetUpdating(commands.Cog):
 
     bet_window_ms = int(config['BETTING']['bet_window_ms'])
@@ -33,8 +34,8 @@ class LeagueBetUpdating(commands.Cog):
                 for cur_bet in pending_bets:
                     try:
                         match_results = self.get_stored_match_or_fetch(cur_bet.game_id)
-                        bet_target_summoner_id = db_api.get_user_summoner_id({'id': cur_bet.bet_target})
-                        if not bet_target_summoner_id:
+                        bet_target_puuid = db_api.get_user_puuid({'id': cur_bet.bet_target})
+                        if not bet_target_puuid:
                             log.error(
                                 'Summoner id not found for bet target %s when one was expected' % (cur_bet.bet_target,))
                             pass
@@ -42,9 +43,9 @@ class LeagueBetUpdating(commands.Cog):
                         # TODO make this vary based on the game mode
                         stat_helper = AramStatHelper(match_results)
 
-                        payouts = LeaguePayouts.get_bet_payout(stat_helper, bet_target_summoner_id, cur_bet)
+                        payouts = LeaguePayouts.get_bet_payout(stat_helper, bet_target_puuid, cur_bet)
                         # TODO rollback transaction if both don't go through
-                        did_win = stat_helper.get_stat('win', bet_target_summoner_id)
+                        did_win = stat_helper.get_stat('win', bet_target_puuid)
 
                         channel = cur_bet.channel
                         if not channel:
@@ -96,11 +97,11 @@ class LeagueBetUpdating(commands.Cog):
             for match_history in db_api.get_unresolved_games(user_id):
                 # get the stat payouts
                 match_results = self.get_stored_match_or_fetch(str(match_history.game_id))
-                sum_id = db_api.get_user_summoner_id({'id': user_id})
+                league_puuid = db_api.get_user_puuid({'id': user_id})
                 stat_helper = AramStatHelper(match_results)
                 for guild in self.bot.guilds:
                     if int(user_id) in list(map(lambda member: member.id, guild.members)):
-                        payouts, total = LeaguePayouts.get_payouts(match_results, stat_helper, sum_id, guild.id)
+                        payouts, total = LeaguePayouts.get_payouts(match_results, stat_helper, league_puuid, guild.id)
                         last_channel_id = discord_utils.get_last_channel_or_default(guild)
                         channel = self.bot.get_channel(last_channel_id)
                         headers = ['Title', 'Stat', 'Reward']

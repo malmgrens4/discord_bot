@@ -45,6 +45,7 @@ bot.add_cog(league_displays)
 # bot.add_cog(meta_reports)
 
 bot.load_extension("cogs.Betting")
+bot.load_extension("cogs.LeagueBetUpdating")
 bot.load_extension("cogs.LeaguePayouts")
 bot.load_extension("cogs.Meme")
 bot.load_extension("cogs.MetaReports")

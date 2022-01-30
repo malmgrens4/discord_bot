@@ -30,8 +30,7 @@ class Common(commands.Cog):
         author = ctx.message.author.id
         log.info("User %s registering with account name %s", author, summoner_name)
         try:
-            summoner_id = league_api.get_summoner_id_from_username(summoner_name)
-
+            summoner_id, league_puuid = league_api.get_summoner_and_puuid_id_from_username(summoner_name)
             db_api.update_summoner_id(author, summoner_id)
             db_api.update_league_name(author, summoner_name)
 

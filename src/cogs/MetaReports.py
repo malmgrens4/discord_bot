@@ -15,6 +15,7 @@ config.read('config.ini')
 
 log = logging.getLogger()
 
+
 class MetaReports(commands.Cog):
 
     def __init__(self, bot):
@@ -31,23 +32,34 @@ class MetaReports(commands.Cog):
         # Dict[user, Dict[emoji, count]]
         # TODO depending how long this takes: async with channel.typing():
         reactions_by_user: Dict[int, Dict[str, int]] = {}
+
+        def create_embed(current_date_datetime: datetime = ""):
+            current_date = None
+            if current_date_datetime:
+                current_date = current_date_datetime.strftime(date_format)
+            embed = discord.Embed(
+                title="Reaction Rankings",
+                description=f'Reactions received from {start_date} to {end_date}',
+                color=discord.Color.red())
+            if current_date:
+                embed.add_field(name="Current Date",
+                                value=current_date)
+            if reactions_by_user:
+                for author, emoji_dict in reactions_by_user.items():
+                    embed.add_field(name=get_username_by_id(author),
+                                    value=self.format_emoji_count(emoji_dict) + f'Total: **{sum(emoji_dict.values())}**',
+                                    inline=False)
+            return embed
+
         async with ctx.typing():
+            tally_embed = await ctx.channel.send(embed=create_embed())
             async for message in ctx.channel.history(after=start_time_datetime, before=end_time_datetime, limit=10000):
                 for reaction in message.reactions:
                     reactions_by_user.setdefault(message.author.id, {})
                     emoji_count = reactions_by_user[message.author.id].setdefault(reaction.emoji, 0) + 1
                     reactions_by_user[message.author.id][reaction.emoji] = emoji_count
+                    await tally_embed.edit(embed=create_embed(reaction.message.created_at))
 
-        embed = discord.Embed(
-            title="Reaction Rankings",
-            description=f'Reactions received from {start_date} to {end_date}',
-            color=discord.Color.red())
-        for author, emoji_dict in reactions_by_user.items():
-            embed.add_field(name=get_username_by_id(author),
-                            value=self.format_emoji_count(emoji_dict) + f'Total: **{sum(emoji_dict.values())}**',
-                            inline=False)
-
-        await ctx.send(embed=embed)
 
     @commands.command()
     async def reactions_given(self, ctx: Context, start_date: str, end_date: str = None):
