@@ -10,7 +10,7 @@ cffi==1.15.0
 chardet==3.0.4
 charset-normalizer==2.0.10
 colorama==0.4.4
-cryptography==36.0.1
+cryptography==39.0.1
 discord==1.7.3
 discord.py==1.7.3
 distlib==0.3.1
